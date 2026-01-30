@@ -219,12 +219,13 @@ const EmissionsFlowMarker: React.FC<{
   const [position, setPosition] = useState(0);
 
   useEffect(() => {
-    // Faster movement = higher emissions
-    const base = 3000;
-    const speedFactor = clamp(emissionRate, 0.6, 2.2);
+    // Faster movement = higher emissions (but slowed overall)
+    const base = 12000; // ← doubled baseline → slower everywhere
+
+    const speedFactor = clamp(emissionRate, 0.6, 2.0); // slightly tighter cap
     const duration = base / speedFactor;
 
-    const steps = 110;
+    const steps = 200; // more steps = smoother + visually slower
     let currentStep = 0;
 
     const interval = setInterval(() => {
@@ -234,6 +235,7 @@ const EmissionsFlowMarker: React.FC<{
 
     return () => clearInterval(interval);
   }, [emissionRate]);
+
 
   const getPointAlongPath = (progress: number) => {
     const totalSegments = path.length - 1;
@@ -1099,112 +1101,135 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
 
         {/* HOTSPOTS: Separate container (full-width row), NOT inside map container */}
         {ENABLE_CHENNAI_LIVE ? (
-          <div className="lg:col-span-3 bg-slate-800/50 rounded-lg p-4 border border-slate-700">
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-semibold text-slate-300">Chennai Hotspot Metrics</h4>
-              <div className="text-xs text-slate-400">
-                {hotspotLoading ? "Refreshing…" : "Live"} • {hotspotLastUpdated || "—"}
+          <div className="lg:col-span-3 traf-wrap">
+            <div className="traf-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-semibold text-slate-200">
+                  Chennai Hotspot Metrics
+                </h4>
+
+                <div className="text-xs text-slate-300">
+                  {hotspotLoading ? "Refreshing…" : "Live"} • {hotspotLastUpdated || "—"}
+                </div>
               </div>
-            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {CHENNAI_HOTSPOTS.map((h) => {
-                const r = hotspotResults[h.id];
-                const ok = r && (r as any).ok === true;
-                const flow = ok ? ((r as any).flow as HotspotFlow) : undefined;
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {CHENNAI_HOTSPOTS.map((h) => {
+                  const r = hotspotResults[h.id];
+                  const ok = r && (r as any).ok === true;
+                  const flow = ok ? ((r as any).flow as HotspotFlow) : undefined;
 
-                return (
-                  <div key={h.id} className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="text-xs font-semibold text-slate-200">{h.name}</div>
-                        <div className="text-[11px] text-slate-400">{h.hint}</div>
+                  return (
+                    <div
+                      key={h.id}
+                      className="rounded-xl border border-white/10 bg-black/20 p-3 backdrop-blur-sm"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-semibold text-slate-100">
+                            {h.name}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            {h.hint}
+                          </div>
+                        </div>
+
+                        <div className="text-[11px] text-slate-400">
+                          {ok ? "OK" : "—"}
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-400">{ok ? "OK" : "—"}</div>
+
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <div className="traf-mini">
+                          <div className="traf-miniLabel">Speed</div>
+                          <div className="traf-miniVal">
+                            {fmtKmph(flow?.currentSpeedKmph)}
+                          </div>
+                        </div>
+
+                        <div className="traf-mini">
+                          <div className="traf-miniLabel">Freeflow</div>
+                          <div className="traf-miniVal">
+                            {fmtKmph(flow?.freeFlowSpeedKmph)}
+                          </div>
+                        </div>
+
+                        <div className="traf-mini">
+                          <div className="traf-miniLabel">Travel</div>
+                          <div className="traf-miniVal">
+                            {fmtMin(flow?.currentTravelTimeSec)}
+                          </div>
+                        </div>
+
+                        <div className="traf-mini">
+                          <div className="traf-miniLabel">Confidence</div>
+                          <div className="traf-miniVal">
+                            {pct(flow?.confidence)}
+                          </div>
+                        </div>
+                      </div>
+
+                      {!ok && r ? (
+                        <div className="mt-2 text-[11px] text-amber-300">
+                          API error {(r as any).error?.status ?? "?"}
+                        </div>
+                      ) : null}
                     </div>
-
-                    <div className="mt-2 grid grid-cols-2 gap-2">
-                      <div className="rounded-md border border-slate-700 bg-slate-950/40 px-2 py-1">
-                        <div className="text-[10px] text-slate-400">Speed</div>
-                        <div className="text-xs font-semibold text-slate-100">{fmtKmph(flow?.currentSpeedKmph)}</div>
-                      </div>
-
-                      <div className="rounded-md border border-slate-700 bg-slate-950/40 px-2 py-1">
-                        <div className="text-[10px] text-slate-400">Freeflow</div>
-                        <div className="text-xs font-semibold text-slate-100">{fmtKmph(flow?.freeFlowSpeedKmph)}</div>
-                      </div>
-
-                      <div className="rounded-md border border-slate-700 bg-slate-950/40 px-2 py-1">
-                        <div className="text-[10px] text-slate-400">Travel</div>
-                        <div className="text-xs font-semibold text-slate-100">{fmtMin(flow?.currentTravelTimeSec)}</div>
-                      </div>
-
-                      <div className="rounded-md border border-slate-700 bg-slate-950/40 px-2 py-1">
-                        <div className="text-[10px] text-slate-400">Confidence</div>
-                        <div className="text-xs font-semibold text-slate-100">{pct(flow?.confidence)}</div>
-                      </div>
-                    </div>
-
-                    {!ok && r ? (
-                      <div className="mt-2 text-[11px] text-amber-200/80">
-                        API error {(r as any).error?.status ?? "?"}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-
-            {!TOMTOM_PUBLIC_KEY ? (
-              <div className="mt-3 text-[11px] text-amber-200/80">
-                Tip: set NEXT_PUBLIC_TOMTOM_API_KEY to enable the traffic overlay tiles.
+                  );
+                })}
               </div>
-            ) : null}
+
+              {!TOMTOM_PUBLIC_KEY ? (
+                <div className="mt-3 text-[11px] text-amber-300">
+                  Tip: set NEXT_PUBLIC_TOMTOM_API_KEY to enable the traffic overlay tiles.
+                </div>
+              ) : null}
+            </div>
           </div>
         ) : null}
 
+
       </div>
 
-      <style jsx global>{`
-        @keyframes pulse-emission {
-          0%,
-          100% {
-            transform: scale(1);
-            opacity: 1;
-          }
-          50% {
-            transform: scale(1.3);
-            opacity: 0.7;
-          }
-        }
+      <style jsx>{`
+.traf-wrap {
+  --bg: rgba(255,255,255,0.06);
+  --bg2: rgba(255,255,255,0.04);
+  --stroke: rgba(255,255,255,0.12);
+  --shadow: 0 18px 60px rgba(0,0,0,0.35);
+  --radius: 22px;
+}
 
-        @keyframes bounce-incident {
-          0%,
-          100% {
-            transform: translateY(0);
-          }
-          50% {
-            transform: translateY(-5px);
-          }
-        }
+.traf-card {
+  border-radius: var(--radius);
+  border: 1px solid var(--stroke);
+  background:
+    radial-gradient(700px 240px at 14% 12%, rgba(99,102,241,0.22), transparent 60%),
+    radial-gradient(560px 240px at 92% 10%, rgba(168,85,247,0.18), transparent 60%),
+    linear-gradient(180deg, var(--bg), var(--bg2));
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+}
 
-        .emission-marker,
-        .incident-icon {
-          background: transparent !important;
-          border: none !important;
-        }
+.traf-mini {
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  padding: 8px;
+}
 
-        .leaflet-popup-content-wrapper {
-          background: rgb(15 23 42);
-          color: rgb(226 232 240);
-          border-radius: 8px;
-          border: 1px solid rgb(51 65 85);
-        }
+.traf-miniLabel {
+  font-size: 10px;
+  color: rgba(255,255,255,0.6);
+}
 
-        .leaflet-popup-tip {
-          background: rgb(15 23 42);
-        }
-      `}</style>
+.traf-miniVal {
+  font-size: 13px;
+  font-weight: 700;
+  margin-top: 4px;
+}
+`}</style>
+
     </div>
   );
 };

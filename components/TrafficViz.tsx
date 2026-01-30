@@ -117,9 +117,30 @@ export default function TrafficViz({
 }) {
   const [history, setHistory] = useState<Snap[]>([]);
   const [nowTick, setNowTick] = useState(0);
+  const [isPollingFallback, setIsPollingFallback] = useState(false);
+
+  // Animated display value for smooth transitions
+  const [displayCongestion, setDisplayCongestion] = useState(1.0);
 
   const latest = history[history.length - 1];
   const startedRef = useRef(false);
+
+  // Animation frame loop for smooth interpolation
+  useEffect(() => {
+    let handle = 0;
+    const update = () => {
+      if (latest) {
+        setDisplayCongestion(prev => {
+          const diff = latest.congestionFactor - prev;
+          if (Math.abs(diff) < 0.005) return latest.congestionFactor;
+          return prev + diff * 0.08; // smooth lerp
+        });
+      }
+      handle = requestAnimationFrame(update);
+    };
+    handle = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(handle);
+  }, [latest]);
 
   useEffect(() => {
     // “clock” so "time ago" updates even if values similar
@@ -127,38 +148,70 @@ export default function TrafficViz({
     return () => clearInterval(id);
   }, []);
 
+  // Primary SSE Connection
   useEffect(() => {
-    let alive = true;
+    if (isPollingFallback) return;
 
-    async function tick() {
-      try {
-        const res = await fetch(
-          `/api/traffic/live?point=${encodeURIComponent(point)}&baseDurationMin=${baseDurationMin}`,
-          { cache: "no-store" }
-        );
-        const j = await res.json();
-        if (!alive || !j?.ok) return;
+    const url = `/api/traffic/stream?point=${encodeURIComponent(point)}&baseDurationMin=${baseDurationMin}`;
+    const es = new EventSource(url);
+    startedRef.current = true;
 
-        const snap: Snap = j.snap;
-
-        setHistory((prev) => {
-          const next = [...prev, snap].slice(-28); // ~1 minute at 2s polls
-          return next;
-        });
-
-        startedRef.current = true;
-      } catch {
-        // ignore
-      }
-    }
-
-    tick();
-    const id = setInterval(tick, pollMs);
-    return () => {
-      alive = false;
-      clearInterval(id);
+    es.onopen = () => {
+      // connected ok
     };
-  }, [point, baseDurationMin, pollMs]);
+
+    // Listen for named 'snap' events
+    es.addEventListener("snap", (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data?.snap) {
+          setHistory((prev) => [...prev, data.snap].slice(-28));
+        }
+      } catch (err) {
+        console.error("Stream parse error", err);
+      }
+    });
+
+    es.onerror = (err) => {
+      console.warn("Traffic SSE failed, switching to polling fallback", err);
+      es.close();
+      setIsPollingFallback(true);
+    };
+
+    return () => {
+      es.close();
+      startedRef.current = false;
+    };
+  }, [point, baseDurationMin, isPollingFallback]);
+
+  // Fallback Polling (if SSE fails)
+  useEffect(() => {
+    if (!isPollingFallback) return;
+
+    startedRef.current = true;
+    const fetchSnap = async () => {
+      try {
+        const res = await fetch(`/api/traffic/live?point=${encodeURIComponent(point)}&baseDurationMin=${baseDurationMin}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data?.snap) {
+          setHistory((prev) => [...prev, data.snap].slice(-28));
+        }
+      } catch (e) {
+        console.error("Polling fetch error", e);
+      }
+    };
+
+    fetchSnap();
+    const id = setInterval(fetchSnap, pollMs);
+    return () => clearInterval(id);
+  }, [isPollingFallback, point, baseDurationMin, pollMs]);
+
+  // Reset history when point/config changes
+  useEffect(() => {
+    setHistory([]);
+    setIsPollingFallback(false);
+  }, [point, baseDurationMin]);
 
   const series = useMemo(() => {
     const vals = history.map((h) => h.congestionFactor);
@@ -209,7 +262,7 @@ export default function TrafficViz({
           <div className="traf-hero">
             <div className="traf-heroTop">
               <div className="traf-big">
-                {latest ? latest.congestionFactor.toFixed(2) : "—"}x
+                {latest ? displayCongestion.toFixed(2) : "—"}x
               </div>
               <div className="traf-bigSub">Congestion multiplier</div>
             </div>
@@ -259,10 +312,10 @@ export default function TrafficViz({
               <div className="traf-foot">
                 <div className="traf-footLeft">
                   <span className="traf-footDot" />
-                  <span>Auto-refresh: {Math.round(pollMs / 100) / 10}s</span>
+                  <span>Stream: {isPollingFallback ? `${Math.round(pollMs / 1000)}s poll` : "SSE Active"}</span>
                 </div>
                 <div className="traf-footRight">
-                  <span className="traf-muted">Mode:</span> <b>{process.env.NEXT_PUBLIC_TRAFFIC_MODE ?? "sim"}</b>
+                  <span className="traf-muted">Mode:</span> <b>{typeof process !== 'undefined' ? (process.env.NEXT_PUBLIC_TRAFFIC_MODE ?? "live") : "live"}</b>
                 </div>
               </div>
             </div>

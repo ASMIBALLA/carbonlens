@@ -1,38 +1,19 @@
-export interface TrafficSignal {
-  congestionIndex: number;
-  delayMinutes: number;
-  reliability: number;
-}
+import { TrafficSnapshot } from "./types";
+import { simulateTrafficSnapshot } from "./simTraffic";
 
-const TOMTOM_KEY = process.env.TOMTOM_API_KEY!;
+// For now: sim mode. Later: set TRAFFIC_MODE=tomtom and implement fetch in here.
+export async function getTrafficSnapshot(point: string, baseDurationMin: number): Promise<TrafficSnapshot> {
+  const mode = (process.env.TRAFFIC_MODE || "sim").toLowerCase();
 
-export async function fetchTrafficSignal(
-  origin: string,
-  destination: string
-): Promise<TrafficSignal> {
+  if (mode === "sim") {
+    return simulateTrafficSnapshot(point, baseDurationMin);
+  }
 
   try {
-    const url = `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json?point=${origin}&key=${TOMTOM_KEY}`;
-
-    const res = await fetch(url, { cache: "no-store" });
-    const data = await res.json();
-
-    const speed = data.flowSegmentData.currentSpeed;
-    const free = data.flowSegmentData.freeFlowSpeed;
-
-    const congestion = 1 - speed / free;
-
-    return {
-      congestionIndex: Math.max(0, Math.min(1, congestion)),
-      delayMinutes: data.flowSegmentData.currentTravelTime - data.flowSegmentData.freeFlowTravelTime,
-      reliability: 0.9,
-    };
-
-  } catch (e) {
-    return {
-      congestionIndex: 0.3,
-      delayMinutes: 8,
-      reliability: 0.4,
-    };
+    const { fetchTomTomTraffic } = await import("./tomtom");
+    return await fetchTomTomTraffic(point, baseDurationMin);
+  } catch (error) {
+    console.warn("Falling back to simulation due to provider error:", error);
+    return simulateTrafficSnapshot(point, baseDurationMin);
   }
 }

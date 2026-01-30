@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-
 type Hotspot = {
   id: string;
   name: string;
@@ -20,22 +19,22 @@ type HotspotFlow = {
 
 type HotspotResult =
   | {
-      id: string;
-      name: string;
-      lat: number;
-      lon: number;
-      ok: true;
-      flow: HotspotFlow;
-      fetchedAt: string;
-    }
+    id: string;
+    name: string;
+    lat: number;
+    lon: number;
+    ok: true;
+    flow: HotspotFlow;
+    fetchedAt: string;
+  }
   | {
-      id: string;
-      name: string;
-      lat: number;
-      lon: number;
-      ok: false;
-      error: { status: number; body: string };
-    };
+    id: string;
+    name: string;
+    lat: number;
+    lon: number;
+    ok: false;
+    error: { status: number; body: string };
+  };
 
 const MODE = process.env.TRAFFIC_MODE ?? "sim";
 
@@ -86,9 +85,8 @@ export async function POST(req: Request) {
   /* =========================
      🔒 LIVE MODE (TomTom)
      ========================= */
-
-
   const key = process.env.TOMTOM_API_KEY;
+
   if (!key) {
     return NextResponse.json(
       { ok: false, error: { status: 500, body: "Missing TOMTOM_API_KEY" } },
@@ -96,22 +94,19 @@ export async function POST(req: Request) {
     );
   }
 
-const tomtomKey: string = key;
+  const tomtomKey: string = key;
 
   async function fetchFlow(h: Hotspot): Promise<HotspotResult> {
+    // FIX: Use 'flowSegmentData' endpoint instead of 'incidentDetails'.
+    // This provides speed/travel time and avoids 403 errors from restricted/incorrect endpoints.
+    // Format: flowSegmentData/absolute/{zoom}/json?point=lat,lon
     const url =
-    `https://api.tomtom.com/traffic/services/5/incidentDetails` +
-    `?bbox=${encodeURIComponent(
-      `${h.lon - 0.01},${h.lat - 0.01},${h.lon + 0.01},${h.lat + 0.01}`
-    )}` +
-    `&fields={incidents{geometry,properties{iconCategory,delayMagnitude,confidence}}}` +
-    `&language=en-GB` +
-    `&key=${encodeURIComponent(tomtomKey)}`;
-
-
+      `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json` +
+      `?key=${encodeURIComponent(tomtomKey)}` +
+      `&point=${encodeURIComponent(`${h.lat},${h.lon}`)}`;
 
     try {
-      const res = await fetch(url, { cache: "no-store" });
+      const res = await fetch(url, { cache: "no-store", headers: { "Accept": "application/json" } });
       const json = await res.json();
 
       if (!res.ok) {
@@ -125,7 +120,18 @@ const tomtomKey: string = key;
         };
       }
 
-      const incidents = json?.incidents || [];
+      const data = json.flowSegmentData;
+
+      if (!data) {
+        return {
+          id: h.id,
+          name: h.name,
+          lat: h.lat,
+          lon: h.lon,
+          ok: false,
+          error: { status: 404, body: "No flow data found for location" },
+        };
+      }
 
       return {
         id: h.id,
@@ -134,13 +140,12 @@ const tomtomKey: string = key;
         lon: h.lon,
         ok: true,
         flow: {
-          confidence: incidents.length
-            ? incidents.reduce((a: number, i: any) => a + (i.properties?.confidence || 0), 0) /
-              incidents.length
-            : 1,
-          roadClosure: incidents.some(
-            (i: any) => i.properties?.iconCategory === 11
-          ),
+          currentSpeedKmph: data.currentSpeed,
+          freeFlowSpeedKmph: data.freeFlowSpeed,
+          currentTravelTimeSec: data.currentTravelTime,
+          freeFlowTravelTimeSec: data.freeFlowTravelTime,
+          confidence: data.confidence,
+          roadClosure: data.roadClosure ?? false,
         },
         fetchedAt: new Date().toISOString(),
       };
@@ -151,7 +156,7 @@ const tomtomKey: string = key;
         lat: h.lat,
         lon: h.lon,
         ok: false,
-        error: { status: 500, body: e.message || "Incident fetch failed" },
+        error: { status: 500, body: e.message || "Flow fetch failed" },
       };
     }
   }
