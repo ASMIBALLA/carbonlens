@@ -129,6 +129,8 @@ const EmissionsFlowMarker: React.FC<{
   return <Marker position={currentPos} icon={emissionIcon} />;
 };
 
+
+
 const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
   route,
   incidents,
@@ -142,9 +144,58 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
   const [hotspotResults, setHotspotResults] = useState<Record<string, HotspotResult>>({});
   const [hotspotLastUpdated, setHotspotLastUpdated] = useState<string>("");
   const [hotspotLoading, setHotspotLoading] = useState<boolean>(false);
+  // ===== LIVE DATA STATE =====
+  const [liveRoute, setLiveRoute] = useState<RouteSegment[]>([]);
+  const [liveIncidents, setLiveIncidents] = useState<TrafficIncident[]>([]);
 
   /** NEW: cache-buster tick for traffic overlay tiles */
   const [tileTick, setTileTick] = useState<number>(0);
+
+  // ===== LIVE TRAFFIC POLLING =====
+useEffect(() => {
+  let cancelled = false;
+
+  async function fetchLiveData() {
+    try {
+      const routeRes = await fetch("/api/traffic/route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          origin: { lat: 13.0067, lon: 80.2575 },
+          destination: { lat: 13.0850, lon: 80.2101 },
+        }),
+      });
+
+      const routeJson = await routeRes.json();
+
+      if (!cancelled && routeJson?.ok) {
+        setLiveRoute(routeJson.segments);
+      }
+
+      const incRes = await fetch("/api/traffic/incidents?city=chennai");
+      const incJson = await incRes.json();
+
+      if (!cancelled && incJson?.ok) {
+        setLiveIncidents(
+          incJson.incidents.map((i: any) => ({
+            ...i,
+            timestamp: new Date(i.timestamp),
+          }))
+        );
+      }
+    } catch (e) {
+      console.error("Live traffic fetch failed", e);
+    }
+  }
+
+  fetchLiveData();
+  const id = setInterval(fetchLiveData, 15000);
+
+  return () => {
+    cancelled = true;
+    clearInterval(id);
+  };
+}, []);
 
   // Demo data - San Francisco Bay Area supply chain route
   const demoRoute: RouteSegment[] = [
@@ -324,8 +375,21 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
     }
   ];
 
-  const activeRoute = route || (ENABLE_CHENNAI_LIVE ? chennaiRoute : demoRoute);
-  const activeIncidents = incidents || (ENABLE_CHENNAI_LIVE ? chennaiIncidents : demoIncidents);
+  const activeRoute =
+    route ??
+    (liveRoute.length > 0
+      ? liveRoute
+      : ENABLE_CHENNAI_LIVE
+      ? chennaiRoute
+      : demoRoute);
+
+  const activeIncidents =
+    incidents ??
+    (liveIncidents.length > 0
+      ? liveIncidents
+      : ENABLE_CHENNAI_LIVE
+      ? chennaiIncidents
+      : demoIncidents);
 
   useEffect(() => {
     const total = activeRoute.reduce((sum, seg) => sum + seg.adjustedEmissions, 0);
