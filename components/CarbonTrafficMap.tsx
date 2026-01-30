@@ -1,23 +1,25 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Polyline, Marker, Popup, useMap } from 'react-leaflet';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
+import React, { useState, useEffect, useMemo } from "react";
+import { MapContainer, TileLayer, Polyline, Marker, Popup, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 // Fix Leaflet default marker icons
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
 });
 
+// =====================
 // Types
+// =====================
 interface TrafficIncident {
   id: string;
-  type: 'accident' | 'construction' | 'congestion' | 'weather';
+  type: "accident" | "construction" | "congestion" | "weather";
   location: string;
   coordinates: [number, number];
-  severity: 'low' | 'medium' | 'high';
+  severity: "low" | "medium" | "high";
   delay: number;
   emissionsImpact: number; // kg CO2e added due to idling/detours
   timestamp: Date;
@@ -26,23 +28,45 @@ interface TrafficIncident {
 interface RouteSegment {
   id: string;
   path: [number, number][];
-  band: 'Free' | 'Moderate' | 'Heavy' | 'Severe';
+  band: "Free" | "Moderate" | "Heavy" | "Severe";
   multiplier: number;
   confidence: number;
-  baseEmissions: number; // kg CO2e at free flow
-  adjustedEmissions: number; // kg CO2e with traffic
-  deltaEmissions: number; // additional CO2e from congestion
+  baseEmissions: number;
+  adjustedEmissions: number;
+  deltaEmissions: number;
 }
+
+type RouteOption = {
+  id: string;
+  name: string;
+  segments: RouteSegment[];
+  kind?: "primary" | "alt";
+};
 
 interface CarbonTrafficMapProps {
+  // Backwards-compatible single route input
   route?: RouteSegment[];
+
+  // NEW: multi-route input (primary + alternatives)
+  routes?: RouteOption[];
+
   incidents?: TrafficIncident[];
   animated?: boolean;
+
+  // Optional: allow selecting primary route from outside
+  activeRouteId?: string;
+  onRouteSelect?: (routeId: string) => void;
+
+  source?: { label?: string; coord: [number, number] };
+  destination?: { label?: string; coord: [number, number] };
+  autoPickBestRoute?: boolean; // default false
+
 }
 
-/** ====== NEW: Chennai live mode toggles (no rendering change unless enabled) ====== **/
+/** ====== Chennai live mode toggles ====== **/
 const ENABLE_CHENNAI_LIVE =
-  typeof process !== "undefined" && (process.env.NEXT_PUBLIC_CHENNAI_LIVE === "1" || process.env.NEXT_PUBLIC_CHENNAI_LIVE === "true");
+  typeof process !== "undefined" &&
+  (process.env.NEXT_PUBLIC_CHENNAI_LIVE === "1" || process.env.NEXT_PUBLIC_CHENNAI_LIVE === "true");
 
 const TOMTOM_PUBLIC_KEY =
   typeof process !== "undefined" ? process.env.NEXT_PUBLIC_TOMTOM_API_KEY : undefined;
@@ -66,24 +90,141 @@ const CHENNAI_HOTSPOTS: Hotspot[] = [
   { id: "guindy", name: "Guindy", lat: 13.0109, lon: 80.2123, hint: "GST corridor + industrial traffic" },
   { id: "adyar", name: "Adyar", lat: 13.0067, lon: 80.2575, hint: "Bridge + school zones" },
   { id: "velachery", name: "Velachery", lat: 12.9756, lon: 80.2212, hint: "IT commute + mall traffic" },
-  { id: "annanagar", name: "Anna Nagar", lat: 13.0850, lon: 80.2101, hint: "Residential arterials" },
-  { id: "egmore", name: "Egmore", lat: 13.0784, lon: 80.2610, hint: "Central junctions" },
-  { id: "mylapore", name: "Mylapore", lat: 13.0339, lon: 80.2690, hint: "Dense inner streets" },
+  { id: "annanagar", name: "Anna Nagar", lat: 13.085, lon: 80.2101, hint: "Residential arterials" },
+  { id: "egmore", name: "Egmore", lat: 13.0784, lon: 80.261, hint: "Central junctions" },
+  { id: "mylapore", name: "Mylapore", lat: 13.0339, lon: 80.269, hint: "Dense inner streets" },
   { id: "porur", name: "Porur", lat: 13.0374, lon: 80.1567, hint: "Ring-road spillover" },
 ];
 
-/** ===== Existing animated marker component ===== **/
+// =====================
+// Animation helpers
+// =====================
+const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
+
+const bandFromSpeed = (speedKmph?: number) => {
+  if (typeof speedKmph !== "number") return { band: "Moderate" as const, multiplier: 1.18 };
+  if (speedKmph > 35) return { band: "Free" as const, multiplier: 1.02 };
+  if (speedKmph > 25) return { band: "Moderate" as const, multiplier: 1.18 };
+  if (speedKmph > 15) return { band: "Heavy" as const, multiplier: 1.45 };
+  return { band: "Severe" as const, multiplier: 1.6 };
+};
+
+const routeTotals = (segs: RouteSegment[]) => {
+  const total = segs.reduce((s, x) => s + x.adjustedEmissions, 0);
+  const delta = segs.reduce((s, x) => s + x.deltaEmissions, 0);
+  const base = segs.reduce((s, x) => s + x.baseEmissions, 0);
+  return { total, delta, base };
+};
+
+const getBandColor = (band: string) => {
+  switch (band) {
+    case "Free":
+      return "#10b981";
+    case "Moderate":
+      return "#f59e0b";
+    case "Heavy":
+      return "#ef4444";
+    case "Severe":
+      return "#991b1b";
+    default:
+      return "#6b7280";
+  }
+};
+
+const severityClass = (severity: string) => {
+  switch (severity) {
+    case "high":
+      return "bg-red-500/10 border-red-500/30";
+    case "medium":
+      return "bg-amber-500/10 border-amber-500/30";
+    case "low":
+      return "bg-blue-500/10 border-blue-500/30";
+    default:
+      return "bg-slate-800/40 border-slate-700";
+  }
+};
+
+const severityTextClass = (severity: string) => {
+  switch (severity) {
+    case "high":
+      return "text-red-300";
+    case "medium":
+      return "text-amber-300";
+    case "low":
+      return "text-blue-300";
+    default:
+      return "text-slate-300";
+  }
+};
+
+const severityChipClass = (severity: string) => {
+  switch (severity) {
+    case "high":
+      return "border-red-500/30 bg-red-500/10";
+    case "medium":
+      return "border-amber-500/30 bg-amber-500/10";
+    case "low":
+      return "border-blue-500/30 bg-blue-500/10";
+    default:
+      return "border-slate-600/40 bg-slate-900/30";
+  }
+};
+
+
+
+const formatTimestamp = (date: Date) => {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  return `${diffHours}h ago`;
+};
+
+const getIncidentIcon = (incident: TrafficIncident) => {
+  const iconMap = {
+    accident: "🚨",
+    construction: "🚧",
+    weather: "🌧️",
+    congestion: "🚗",
+  } as const;
+
+  return L.divIcon({
+    className: "incident-icon",
+    html: `
+      <div style="
+        font-size: 24px;
+        text-align: center;
+        animation: bounce-incident 2s ease-in-out infinite;
+      ">
+        ${iconMap[incident.type]}
+      </div>
+    `,
+    iconSize: [30, 30],
+  });
+};
+
+// =====================
+// Existing particle marker (extended via “intensity”)
+// =====================
 const EmissionsFlowMarker: React.FC<{
   path: [number, number][];
   color: string;
-  emissionRate: number;
-}> = ({ path, color, emissionRate }) => {
+  emissionRate: number; // bigger = faster
+  intensity: number; // bigger = brighter glow & size
+  zIndexOffset?: number;
+}> = ({ path, color, emissionRate, intensity, zIndexOffset = 0 }) => {
   const map = useMap();
   const [position, setPosition] = useState(0);
 
   useEffect(() => {
-    const duration = 3000 / emissionRate; // Faster movement = higher emissions
-    const steps = 100;
+    // Faster movement = higher emissions
+    const base = 3000;
+    const speedFactor = clamp(emissionRate, 0.6, 2.2);
+    const duration = base / speedFactor;
+
+    const steps = 110;
     let currentStep = 0;
 
     const interval = setInterval(() => {
@@ -97,7 +238,7 @@ const EmissionsFlowMarker: React.FC<{
   const getPointAlongPath = (progress: number) => {
     const totalSegments = path.length - 1;
     const segmentIndex = Math.floor(progress * totalSegments);
-    const segmentProgress = (progress * totalSegments) - segmentIndex;
+    const segmentProgress = progress * totalSegments - segmentIndex;
 
     if (segmentIndex >= path.length - 1) return path[path.length - 1];
 
@@ -106,352 +247,336 @@ const EmissionsFlowMarker: React.FC<{
 
     return [
       start[0] + (end[0] - start[0]) * segmentProgress,
-      start[1] + (end[1] - start[1]) * segmentProgress
+      start[1] + (end[1] - start[1]) * segmentProgress,
     ] as [number, number];
   };
 
   const currentPos = getPointAlongPath(position);
 
+  const size = Math.round(10 + clamp(intensity, 0, 2.5) * 6); // 10..25ish
+  const glow = 10 + clamp(intensity, 0, 2.5) * 18;
+
   const emissionIcon = L.divIcon({
-    className: 'emission-marker',
+    className: "emission-marker",
     html: `<div style="
-      width: 12px;
-      height: 12px;
+      width: ${size}px;
+      height: ${size}px;
       background: ${color};
       border-radius: 50%;
-      border: 2px solid rgba(255,255,255,0.8);
-      box-shadow: 0 0 12px ${color};
-      animation: pulse-emission 1s ease-in-out infinite;
+      border: 2px solid rgba(255,255,255,0.82);
+      box-shadow: 0 0 ${glow}px ${color};
+      animation: pulse-emission 1.05s ease-in-out infinite;
+      opacity: 0.95;
     "></div>`,
-    iconSize: [12, 12],
+    iconSize: [size, size],
   });
 
-  return <Marker position={currentPos} icon={emissionIcon} />;
+  return <Marker position={currentPos} icon={emissionIcon} zIndexOffset={zIndexOffset} />;
 };
 
-
-
+// =====================
+// Main component
+// =====================
 const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
   route,
+  routes,
   incidents,
-  animated = true
+  animated = true,
+  activeRouteId,
+  onRouteSelect,
+  source,
+  destination,
+  autoPickBestRoute = false,
+  
 }) => {
   const [activeSegment, setActiveSegment] = useState<string | null>(null);
-  const [totalEmissions, setTotalEmissions] = useState(0);
-  const [emissionsDelta, setEmissionsDelta] = useState(0);
 
-  /** ====== NEW: hotspot metrics state (only used in Chennai live mode) ====== **/
+  /** ====== hotspot metrics state (Chennai mode) ====== **/
   const [hotspotResults, setHotspotResults] = useState<Record<string, HotspotResult>>({});
   const [hotspotLastUpdated, setHotspotLastUpdated] = useState<string>("");
   const [hotspotLoading, setHotspotLoading] = useState<boolean>(false);
-  // ===== LIVE DATA STATE =====
-  const [liveRoute, setLiveRoute] = useState<RouteSegment[]>([]);
-  const [liveIncidents, setLiveIncidents] = useState<TrafficIncident[]>([]);
 
+
+  
   /** NEW: cache-buster tick for traffic overlay tiles */
   const [tileTick, setTileTick] = useState<number>(0);
 
-  // ===== LIVE TRAFFIC POLLING =====
-useEffect(() => {
-  let cancelled = false;
+  // ===== LIVE DATA STATE (optional, if you later compute real routes/incidents) =====
+  const [liveRoutes, setLiveRoutes] = useState<RouteOption[]>([]);
+  const [liveIncidents, setLiveIncidents] = useState<TrafficIncident[]>([]);
 
-  async function fetchLiveData() {
-    try {
-      const routeRes = await fetch("/api/traffic/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          origin: { lat: 13.0067, lon: 80.2575 },
-          destination: { lat: 13.0850, lon: 80.2101 },
-        }),
-      });
-
-      const routeJson = await routeRes.json();
-
-      if (!cancelled && routeJson?.ok) {
-        setLiveRoute(routeJson.segments);
-      }
-
-      const incRes = await fetch("/api/traffic/incidents?city=chennai");
-      const incJson = await incRes.json();
-
-      if (!cancelled && incJson?.ok) {
-        setLiveIncidents(
-          incJson.incidents.map((i: any) => ({
-            ...i,
-            timestamp: new Date(i.timestamp),
-          }))
-        );
-      }
-    } catch (e) {
-      console.error("Live traffic fetch failed", e);
-    }
-  }
-
-  fetchLiveData();
-  const id = setInterval(fetchLiveData, 15000);
-
-  return () => {
-    cancelled = true;
-    clearInterval(id);
-  };
-}, []);
-
-  // Demo data - San Francisco Bay Area supply chain route
+  // =====================
+  // Demo routes/incidents
+  // =====================
   const demoRoute: RouteSegment[] = [
     {
-      id: 'seg-1',
+      id: "seg-1",
       path: [
-        [37.7749, -122.4194], // SF
-        [37.8044, -122.2712], // Oakland
+        [37.7749, -122.4194],
+        [37.8044, -122.2712],
       ],
-      band: 'Free',
+      band: "Free",
       multiplier: 1.02,
       confidence: 0.92,
       baseEmissions: 45,
       adjustedEmissions: 45.9,
-      deltaEmissions: 0.9
+      deltaEmissions: 0.9,
     },
     {
-      id: 'seg-2',
+      id: "seg-2",
       path: [
-        [37.8044, -122.2712], // Oakland
-        [37.8716, -122.2727], // Berkeley
+        [37.8044, -122.2712],
+        [37.8716, -122.2727],
       ],
-      band: 'Moderate',
+      band: "Moderate",
       multiplier: 1.18,
       confidence: 0.85,
       baseEmissions: 32,
       adjustedEmissions: 37.8,
-      deltaEmissions: 5.8
+      deltaEmissions: 5.8,
     },
     {
-      id: 'seg-3',
+      id: "seg-3",
       path: [
-        [37.8716, -122.2727], // Berkeley
-        [37.9577, -122.3477], // Richmond
+        [37.8716, -122.2727],
+        [37.9577, -122.3477],
       ],
-      band: 'Heavy',
+      band: "Heavy",
       multiplier: 1.45,
       confidence: 0.78,
       baseEmissions: 52,
       adjustedEmissions: 75.4,
-      deltaEmissions: 23.4
+      deltaEmissions: 23.4,
     },
     {
-      id: 'seg-4',
+      id: "seg-4",
       path: [
-        [37.9577, -122.3477], // Richmond
-        [38.0293, -122.2416], // Warehouse destination
+        [37.9577, -122.3477],
+        [38.0293, -122.2416],
       ],
-      band: 'Moderate',
+      band: "Moderate",
       multiplier: 1.21,
       confidence: 0.88,
       baseEmissions: 38,
       adjustedEmissions: 46,
-      deltaEmissions: 8
+      deltaEmissions: 8,
     },
   ];
 
   const demoIncidents: TrafficIncident[] = [
     {
-      id: 'inc-1',
-      type: 'accident',
-      location: 'I-580 E near Livermore',
+      id: "inc-1",
+      type: "accident",
+      location: "I-580 E near Livermore",
       coordinates: [37.9577, -122.3477],
-      severity: 'high',
+      severity: "high",
       delay: 12,
       emissionsImpact: 18.5,
-      timestamp: new Date(Date.now() - 8 * 60000)
+      timestamp: new Date(Date.now() - 8 * 60000),
     },
     {
-      id: 'inc-2',
-      type: 'construction',
-      location: 'I-80 W between Berkeley & Emeryville',
+      id: "inc-2",
+      type: "construction",
+      location: "I-80 W between Berkeley & Emeryville",
       coordinates: [37.8716, -122.2727],
-      severity: 'medium',
+      severity: "medium",
       delay: 7,
       emissionsImpact: 8.2,
-      timestamp: new Date(Date.now() - 23 * 60000)
+      timestamp: new Date(Date.now() - 23 * 60000),
     },
     {
-      id: 'inc-3',
-      type: 'congestion',
-      location: 'US-101 S approaching SFO',
+      id: "inc-3",
+      type: "congestion",
+      location: "US-101 S approaching SFO",
       coordinates: [37.7749, -122.4194],
-      severity: 'low',
+      severity: "low",
       delay: 4,
       emissionsImpact: 3.1,
-      timestamp: new Date(Date.now() - 2 * 60000)
-    }
+      timestamp: new Date(Date.now() - 2 * 60000),
+    },
   ];
 
-  /** ===== NEW: Chennai demo route/incidents (used ONLY when flag enabled) ===== **/
-  const chennaiRoute: RouteSegment[] = [
+  const chennaiRoutePrimary: RouteSegment[] = [
     {
-      id: 'seg-c-1',
+      id: "seg-c-1",
       path: [
-        [13.0067, 80.2575], // Adyar
-        [13.0418, 80.2337], // T Nagar
+        [13.0067, 80.2575],
+        [13.0418, 80.2337],
       ],
-      band: 'Moderate',
-      multiplier: 1.20,
+      band: "Moderate",
+      multiplier: 1.2,
       confidence: 0.86,
       baseEmissions: 28,
       adjustedEmissions: 33.6,
-      deltaEmissions: 5.6
+      deltaEmissions: 5.6,
     },
     {
-      id: 'seg-c-2',
+      id: "seg-c-2",
       path: [
-        [13.0418, 80.2337], // T Nagar
-        [13.0109, 80.2123], // Guindy
+        [13.0418, 80.2337],
+        [13.0109, 80.2123],
       ],
-      band: 'Heavy',
+      band: "Heavy",
       multiplier: 1.42,
-      confidence: 0.80,
+      confidence: 0.8,
       baseEmissions: 34,
       adjustedEmissions: 48.3,
-      deltaEmissions: 14.3
+      deltaEmissions: 14.3,
     },
     {
-      id: 'seg-c-3',
+      id: "seg-c-3",
       path: [
-        [13.0109, 80.2123], // Guindy
-        [12.9756, 80.2212], // Velachery
+        [13.0109, 80.2123],
+        [12.9756, 80.2212],
       ],
-      band: 'Moderate',
+      band: "Moderate",
       multiplier: 1.25,
       confidence: 0.83,
       baseEmissions: 26,
       adjustedEmissions: 32.5,
-      deltaEmissions: 6.5
+      deltaEmissions: 6.5,
     },
     {
-      id: 'seg-c-4',
+      id: "seg-c-4",
       path: [
-        [12.9756, 80.2212], // Velachery
-        [13.0850, 80.2101], // Anna Nagar
+        [12.9756, 80.2212],
+        [13.085, 80.2101],
       ],
-      band: 'Severe',
-      multiplier: 1.60,
+      band: "Severe",
+      multiplier: 1.6,
       confidence: 0.76,
       baseEmissions: 44,
       adjustedEmissions: 70.4,
-      deltaEmissions: 26.4
+      deltaEmissions: 26.4,
+    },
+  ];
+
+  // Two alternates (slight detours) — purely for “other routes” animation demo
+  const chennaiRouteAlt1: RouteSegment[] = [
+    {
+      id: "seg-a1-1",
+      path: [
+        [13.0067, 80.2575],
+        [13.0339, 80.269],
+        [13.0418, 80.2337],
+      ],
+      band: "Moderate",
+      multiplier: 1.18,
+      confidence: 0.82,
+      baseEmissions: 30,
+      adjustedEmissions: 35.4,
+      deltaEmissions: 5.4,
+    },
+    {
+      id: "seg-a1-2",
+      path: [
+        [13.0418, 80.2337],
+        [13.0374, 80.1567],
+        [13.0109, 80.2123],
+      ],
+      band: "Heavy",
+      multiplier: 1.45,
+      confidence: 0.78,
+      baseEmissions: 40,
+      adjustedEmissions: 58,
+      deltaEmissions: 18,
+    },
+    {
+      id: "seg-a1-3",
+      path: [
+        [13.0109, 80.2123],
+        [12.9756, 80.2212],
+        [13.085, 80.2101],
+      ],
+      band: "Moderate",
+      multiplier: 1.22,
+      confidence: 0.8,
+      baseEmissions: 64,
+      adjustedEmissions: 78.1,
+      deltaEmissions: 14.1,
+    },
+  ];
+
+  const chennaiRouteAlt2: RouteSegment[] = [
+    {
+      id: "seg-a2-1",
+      path: [
+        [13.0067, 80.2575],
+        [13.0784, 80.261],
+        [13.0418, 80.2337],
+      ],
+      band: "Moderate",
+      multiplier: 1.16,
+      confidence: 0.8,
+      baseEmissions: 36,
+      adjustedEmissions: 41.8,
+      deltaEmissions: 5.8,
+    },
+    {
+      id: "seg-a2-2",
+      path: [
+        [13.0418, 80.2337],
+        [13.0109, 80.2123],
+        [12.9756, 80.2212],
+      ],
+      band: "Heavy",
+      multiplier: 1.38,
+      confidence: 0.79,
+      baseEmissions: 48,
+      adjustedEmissions: 66.2,
+      deltaEmissions: 18.2,
+    },
+    {
+      id: "seg-a2-3",
+      path: [
+        [12.9756, 80.2212],
+        [13.085, 80.2101],
+      ],
+      band: "Severe",
+      multiplier: 1.55,
+      confidence: 0.75,
+      baseEmissions: 44,
+      adjustedEmissions: 68.2,
+      deltaEmissions: 24.2,
     },
   ];
 
   const chennaiIncidents: TrafficIncident[] = [
     {
-      id: 'inc-c-1',
-      type: 'accident',
-      location: 'Guindy (GST Road) - Incident reported',
+      id: "inc-c-1",
+      type: "accident",
+      location: "Guindy (GST Road) - Incident reported",
       coordinates: [13.0109, 80.2123],
-      severity: 'high',
+      severity: "high",
       delay: 14,
       emissionsImpact: 19.2,
-      timestamp: new Date(Date.now() - 6 * 60000)
+      timestamp: new Date(Date.now() - 6 * 60000),
     },
     {
-      id: 'inc-c-2',
-      type: 'construction',
-      location: 'T Nagar - Road work / lane closure',
+      id: "inc-c-2",
+      type: "construction",
+      location: "T Nagar - Road work / lane closure",
       coordinates: [13.0418, 80.2337],
-      severity: 'medium',
+      severity: "medium",
       delay: 8,
       emissionsImpact: 9.1,
-      timestamp: new Date(Date.now() - 21 * 60000)
+      timestamp: new Date(Date.now() - 21 * 60000),
     },
     {
-      id: 'inc-c-3',
-      type: 'congestion',
-      location: 'Velachery - Peak hour congestion',
+      id: "inc-c-3",
+      type: "congestion",
+      location: "Velachery - Peak hour congestion",
       coordinates: [12.9756, 80.2212],
-      severity: 'low',
+      severity: "low",
       delay: 5,
       emissionsImpact: 3.8,
-      timestamp: new Date(Date.now() - 3 * 60000)
-    }
+      timestamp: new Date(Date.now() - 3 * 60000),
+    },
   ];
 
-  const activeRoute =
-    route ??
-    (liveRoute.length > 0
-      ? liveRoute
-      : ENABLE_CHENNAI_LIVE
-      ? chennaiRoute
-      : demoRoute);
-
-  const activeIncidents =
-    incidents ??
-    (liveIncidents.length > 0
-      ? liveIncidents
-      : ENABLE_CHENNAI_LIVE
-      ? chennaiIncidents
-      : demoIncidents);
-
-  useEffect(() => {
-    const total = activeRoute.reduce((sum, seg) => sum + seg.adjustedEmissions, 0);
-    const delta = activeRoute.reduce((sum, seg) => sum + seg.deltaEmissions, 0);
-    setTotalEmissions(total);
-    setEmissionsDelta(delta);
-  }, [activeRoute]);
-
-  const getBandColor = (band: string) => {
-    switch (band) {
-      case 'Free': return '#10b981';
-      case 'Moderate': return '#f59e0b';
-      case 'Heavy': return '#ef4444';
-      case 'Severe': return '#991b1b';
-      default: return '#6b7280';
-    }
-  };
-
-  const getIncidentIcon = (incident: TrafficIncident) => {
-    const iconMap = {
-      accident: '🚨',
-      construction: '🚧',
-      weather: '🌧️',
-      congestion: '🚗'
-    };
-
-    return L.divIcon({
-      className: 'incident-icon',
-      html: `
-        <div style="
-          font-size: 24px;
-          text-align: center;
-          animation: bounce-incident 2s ease-in-out infinite;
-        ">
-          ${iconMap[incident.type]}
-        </div>
-      `,
-      iconSize: [30, 30],
-    });
-  };
-
-  const getSeverityColor = (severity: string) => {
-    switch (severity) {
-      case 'high': return 'text-red-600 bg-red-50 border-red-200';
-      case 'medium': return 'text-amber-600 bg-amber-50 border-amber-200';
-      case 'low': return 'text-blue-600 bg-blue-50 border-blue-200';
-      default: return 'text-gray-600 bg-gray-50 border-gray-200';
-    }
-  };
-
-  const formatTimestamp = (date: Date) => {
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-
-    if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    const diffHours = Math.floor(diffMins / 60);
-    return `${diffHours}h ago`;
-  };
-
-  /** ===== NEW: Hotspot polling effect (ONLY in Chennai live mode) ===== **/
+  // =====================
+  // Hotspot polling (Chennai)
+  // =====================
   useEffect(() => {
     if (!ENABLE_CHENNAI_LIVE) return;
 
@@ -460,13 +585,14 @@ useEffect(() => {
     async function poll() {
       try {
         setHotspotLoading(true);
+
         const res = await fetch("/api/traffic/segment", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ hotspots: CHENNAI_HOTSPOTS }),
         });
 
-        const json = await res.json().catch(() => null);
+        const json = await res.json();
         if (cancelled) return;
 
         if (!res.ok || !json?.ok) {
@@ -476,12 +602,13 @@ useEffect(() => {
         }
 
         const map: Record<string, HotspotResult> = {};
-        for (const r of (json.results || []) as HotspotResult[]) map[r.id] = r;
+        for (const r of json.results as HotspotResult[]) map[r.id] = r;
 
         setHotspotResults(map);
         setHotspotLastUpdated(new Date().toLocaleTimeString());
         setHotspotLoading(false);
-      } catch {
+      } catch (e) {
+        console.error("Hotspot polling failed", e);
         if (!cancelled) {
           setHotspotLastUpdated(new Date().toLocaleTimeString());
           setHotspotLoading(false);
@@ -490,7 +617,6 @@ useEffect(() => {
     }
 
     poll();
-
     const id = window.setInterval(() => {
       setTileTick((t) => t + 1);
       poll();
@@ -498,11 +624,115 @@ useEffect(() => {
 
     return () => {
       cancelled = true;
-      window.clearInterval(id);
+      clearInterval(id);
     };
   }, []);
 
-  /** ===== NEW: TomTom traffic overlay tiles url (ONLY when key present) ===== **/
+  // =====================
+  // OPTIONAL: “Plug in” hotspot values into route segments (Chennai demo)
+  // - We map each segment endpoint to the nearest hotspot flow (simple + stable)
+  // - Then we re-band & recompute emissions, which then drives animations
+  // =====================
+  const applyHotspotTrafficToSegments = (segments: RouteSegment[], biasId: string) => {
+    // If no results, return original
+    const anyOk = Object.values(hotspotResults).some((r: any) => r?.ok);
+    if (!anyOk) return segments;
+
+    const hotspotsOk = CHENNAI_HOTSPOTS.map((h) => {
+      const r = hotspotResults[h.id] as any;
+      const ok = r && r.ok === true;
+      return {
+        ...h,
+        ok,
+        flow: ok ? (r.flow as HotspotFlow) : undefined,
+      };
+    });
+
+    const dist2 = (a: [number, number], b: [number, number]) => {
+      const dx = a[0] - b[0];
+      const dy = a[1] - b[1];
+      return dx * dx + dy * dy;
+    };
+
+    return segments.map((seg, idx) => {
+      // Use midpoint for mapping
+      const mid = seg.path[Math.floor(seg.path.length / 2)] ?? seg.path[0];
+      const nearest = hotspotsOk
+        .filter((h) => h.ok)
+        .sort((x, y) => dist2([x.lat, x.lon], mid) - dist2([y.lat, y.lon], mid))[0];
+
+      const speed = nearest?.flow?.currentSpeedKmph;
+      const conf = nearest?.flow?.confidence;
+
+      const { band, multiplier } = bandFromSpeed(speed);
+
+      const base = seg.baseEmissions;
+      const adjusted = Math.round(base * multiplier * 10) / 10;
+      const delta = Math.round((adjusted - base) * 10) / 10;
+
+      // Slightly vary alternates so they animate differently (but still driven by live)
+      const altBias =
+        biasId === "primary" ? 1 : biasId === "alt1" ? 1.03 : 0.98;
+
+      const m2 = Math.round(multiplier * altBias * 100) / 100;
+      const adj2 = Math.round(base * m2 * 10) / 10;
+      const del2 = Math.round((adj2 - base) * 10) / 10;
+
+      return {
+        ...seg,
+        band,
+        multiplier: m2,
+        confidence: typeof conf === "number" ? clamp(conf, 0, 1) : seg.confidence,
+        adjustedEmissions: adj2,
+        deltaEmissions: del2,
+      };
+    });
+  };
+
+  // Build internal route options (priority: props.routes > props.route > liveRoutes > demo)
+  const computedRouteOptions: RouteOption[] = useMemo(() => {
+    if (routes && routes.length > 0) return routes;
+    if (route && route.length > 0) {
+      return [{ id: "single", name: "Route", segments: route, kind: "primary" }];
+    }
+    if (liveRoutes.length > 0) return liveRoutes;
+
+    if (ENABLE_CHENNAI_LIVE) {
+      const p = applyHotspotTrafficToSegments(chennaiRoutePrimary, "primary");
+      const a1 = applyHotspotTrafficToSegments(chennaiRouteAlt1, "alt1");
+      const a2 = applyHotspotTrafficToSegments(chennaiRouteAlt2, "alt2");
+      return [
+        { id: "r-primary", name: "Fastest (Live)", segments: p, kind: "primary" },
+        { id: "r-alt-1", name: "Alt A (Detour)", segments: a1, kind: "alt" },
+        { id: "r-alt-2", name: "Alt B (Scenic)", segments: a2, kind: "alt" },
+      ];
+    }
+
+    return [
+      { id: "r-demo", name: "Supply Route", segments: demoRoute, kind: "primary" },
+    ];
+  }, [routes, route, liveRoutes, hotspotResults]);
+
+  // Determine active primary route
+  const internalActiveRouteId = useMemo(() => {
+    if (activeRouteId) return activeRouteId;
+    const primary = computedRouteOptions.find((r) => r.kind === "primary") ?? computedRouteOptions[0];
+    return primary?.id ?? "r-demo";
+  }, [activeRouteId, computedRouteOptions]);
+
+  const primaryRoute = useMemo(() => {
+    return computedRouteOptions.find((r) => r.id === internalActiveRouteId) ??
+      computedRouteOptions.find((r) => r.kind === "primary") ??
+      computedRouteOptions[0];
+  }, [computedRouteOptions, internalActiveRouteId]);
+
+  const activeIncidents =
+    incidents ??
+    (liveIncidents.length > 0 ? liveIncidents : ENABLE_CHENNAI_LIVE ? chennaiIncidents : demoIncidents);
+
+  const totals = useMemo(() => routeTotals(primaryRoute?.segments ?? []), [primaryRoute]);
+
+  /** TomTom traffic overlay tiles url (ONLY when key present) */
   const trafficTileUrl =
     ENABLE_CHENNAI_LIVE && TOMTOM_PUBLIC_KEY
       ? `https://api.tomtom.com/traffic/map/4/tile/flow/relative0-dark/{z}/{x}/{y}.png?key=${encodeURIComponent(
@@ -512,9 +742,36 @@ useEffect(() => {
 
   const fmtKmph = (n?: number) => (typeof n === "number" ? `${Math.round(n)} km/h` : "—");
   const fmtMin = (sec?: number) => (typeof sec === "number" ? `${Math.max(0, Math.round(sec / 60))} min` : "—");
-  const pct = (n?: number) => (typeof n === "number" ? `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%` : "—");
+  const pct = (n?: number) => (typeof n === "number" ? `${Math.round(clamp(n, 0, 1) * 100)}%` : "—");
 
   const center: [number, number] = ENABLE_CHENNAI_LIVE ? [13.0827, 80.2707] : [37.8716, -122.2727];
+
+  // Particle logic:
+  // - Primary route: more particles + higher zIndex
+  // - Alternatives: fewer particles + lower opacity
+  const particleCountForSegment = (seg: RouteSegment, isPrimary: boolean) => {
+    const base = isPrimary ? 2 : 1;
+    const extra = Math.floor(clamp((seg.multiplier - 1) * 4, 0, 4)); // congestion => more
+    const confBoost = seg.confidence > 0.85 ? 1 : 0;
+    return clamp(base + extra + confBoost, 1, isPrimary ? 6 : 3);
+  };
+
+  const intensityForSegment = (seg: RouteSegment, isPrimary: boolean) => {
+    const m = clamp(seg.multiplier, 1, 2.2);
+    const d = clamp(seg.deltaEmissions / 20, 0, 2.2);
+    const c = clamp(seg.confidence, 0.4, 1);
+    const boost = (m - 1) * 1.6 + d * 0.9;
+    return clamp((isPrimary ? 1.0 : 0.65) * boost * c, 0.2, 2.5);
+  };
+
+  // Polyline style “priority”
+  const polyStyleFor = (seg: RouteSegment, isPrimary: boolean) => {
+    const color = getBandColor(seg.band);
+    const intensity = intensityForSegment(seg, isPrimary);
+    const weight = isPrimary ? 7 : 4.5;
+    const opacity = isPrimary ? 0.9 : 0.45;
+    return { color, weight, opacity, intensity };
+  };
 
   return (
     <div className="carbon-traffic-map bg-slate-900 rounded-xl shadow-2xl overflow-hidden border border-slate-700">
@@ -523,112 +780,178 @@ useEffect(() => {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <h3 className="text-lg font-semibold text-slate-100 tracking-tight">
-              Carbon Emissions • Traffic Flow
-            </h3>
+            <h3 className="text-lg font-semibold text-slate-100 tracking-tight">Carbon Emissions • Traffic Flow</h3>
 
-            {/* NEW: subtle live badge only in Chennai mode (doesn't affect layout much) */}
             {ENABLE_CHENNAI_LIVE ? (
               <span className="ml-2 px-2 py-0.5 text-xs bg-emerald-500/15 text-emerald-300 rounded-full border border-emerald-500/30">
                 Chennai Live
               </span>
             ) : null}
           </div>
+
           <div className="flex items-center gap-4">
             <div className="text-right">
               <div className="text-xs text-slate-400">Route Emissions</div>
-              <div className="text-xl font-bold text-emerald-400">{totalEmissions.toFixed(1)} kg CO₂e</div>
+              <div className="text-xl font-bold text-emerald-400">{totals.total.toFixed(1)} kg CO₂e</div>
             </div>
             <div className="text-right">
               <div className="text-xs text-slate-400">Traffic Impact</div>
-              <div className="text-xl font-bold text-red-400">+{emissionsDelta.toFixed(1)} kg</div>
+              <div className="text-xl font-bold text-red-400">+{totals.delta.toFixed(1)} kg</div>
             </div>
           </div>
         </div>
+
+        {/* NEW: route selector (only shows if multiple routes exist) */}
+        {computedRouteOptions.length > 1 ? (
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            {computedRouteOptions.map((r) => {
+              const active = r.id === primaryRoute?.id;
+              const t = routeTotals(r.segments);
+              return (
+                <button
+                  key={r.id}
+                  onClick={() => (onRouteSelect ? onRouteSelect(r.id) : undefined)}
+                  className={[
+                    "px-3 py-1.5 rounded-full border text-xs transition-all",
+                    active
+                      ? "bg-slate-100/10 border-slate-200/30 text-slate-100"
+                      : "bg-slate-950/30 border-slate-700 text-slate-300 hover:bg-slate-100/5",
+                  ].join(" ")}
+                  title={`${t.total.toFixed(1)} kg • +${t.delta.toFixed(1)} kg`}
+                >
+                  <span className="font-semibold">{r.name}</span>
+                  <span className="ml-2 text-slate-400">
+                    {t.total.toFixed(1)}kg • +{t.delta.toFixed(1)}kg
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 p-6">
-        {/* Leaflet Map (LEFT) */}
-        <div className="lg:col-span-2 rounded-lg overflow-hidden border border-slate-800 relative" style={{ height: '500px' }}>
-          <MapContainer
-            center={center}
-            zoom={ENABLE_CHENNAI_LIVE ? 12 : 11}
-            style={{ height: '100%', width: '100%' }}
-            zoomControl={true}
-          >
+        {/* Map */}
+        <div
+          className="lg:col-span-2 rounded-lg overflow-hidden border border-slate-800 relative"
+          style={{ height: "500px" }}
+        >
+          <MapContainer center={center} zoom={ENABLE_CHENNAI_LIVE ? 12 : 11} style={{ height: "100%", width: "100%" }} zoomControl>
             <TileLayer
               url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
             />
 
-            {/* Traffic overlay tiles (transparent). Only shows when Chennai live + key present. */}
             {trafficTileUrl ? <TileLayer url={trafficTileUrl} opacity={0.85} /> : null}
 
-            {/* Route segments */}
-            {activeRoute.map((segment) => (
-              <React.Fragment key={segment.id}>
-                <Polyline
-                  positions={segment.path}
-                  pathOptions={{
-                    color: getBandColor(segment.band),
-                    weight: 6,
-                    opacity: 0.8,
-                  }}
-                  eventHandlers={{
-                    click: () => setActiveSegment(segment.id),
-                    mouseover: (e) => {
-                      e.target.setStyle({ weight: 8, opacity: 1 });
-                    },
-                    mouseout: (e) => {
-                      e.target.setStyle({ weight: 6, opacity: 0.8 });
-                    },
-                  }}
-                >
-                  <Popup>
-                    <div className="text-sm">
-                      <div className="font-bold mb-2">{segment.band} Congestion</div>
-                      <div className="space-y-1 text-xs">
-                        <div>Multiplier: <strong>{segment.multiplier}×</strong></div>
-                        <div>Base: <strong>{segment.baseEmissions} kg CO₂e</strong></div>
-                        <div>Adjusted: <strong className="text-red-600">{segment.adjustedEmissions} kg CO₂e</strong></div>
-                        <div>Traffic Impact: <strong className="text-red-600">+{segment.deltaEmissions} kg</strong></div>
-                        <div>Confidence: <strong>{(segment.confidence * 100).toFixed(0)}%</strong></div>
-                      </div>
-                    </div>
-                  </Popup>
-                </Polyline>
+            {/* Render ALL routes:
+                - primary route (selected) on top: higher opacity & more particles
+                - others below: faded + fewer particles
+            */}
+            {computedRouteOptions.map((routeOpt) => {
+              const isPrimary = routeOpt.id === primaryRoute?.id;
+              const z = isPrimary ? 400 : 200;
 
-                {/* Animated emission particles */}
-                {animated && (
-                  <>
-                    <EmissionsFlowMarker
-                      path={segment.path}
-                      color={getBandColor(segment.band)}
-                      emissionRate={segment.multiplier}
-                    />
-                    <EmissionsFlowMarker
-                      path={segment.path}
-                      color={getBandColor(segment.band)}
-                      emissionRate={segment.multiplier * 0.7}
-                    />
-                  </>
-                )}
-              </React.Fragment>
-            ))}
+              return (
+                <React.Fragment key={routeOpt.id}>
+                  {routeOpt.segments.map((segment) => {
+                    const style = polyStyleFor(segment, isPrimary);
 
-            {/* Incident markers */}
+                    // “Shimmer” class only when animated; it’s subtle + doesn’t break anything
+                    const className = animated ? (isPrimary ? "poly-shimmer-primary" : "poly-shimmer-alt") : undefined;
+
+                    const nParticles = animated ? particleCountForSegment(segment, isPrimary) : 0;
+                    const intensity = intensityForSegment(segment, isPrimary);
+
+                    // Spread particles with slightly different rates so it looks “alive”
+                    const rates: number[] = [];
+                    for (let i = 0; i < nParticles; i++) {
+                      const factor = 1 - i * 0.12;
+                      rates.push(clamp(segment.multiplier * factor, 0.7, 2.2));
+                    }
+
+                    return (
+                      <React.Fragment key={`${routeOpt.id}:${segment.id}`}>
+                        <Polyline
+                          positions={segment.path}
+                          pathOptions={{
+                            color: style.color,
+                            weight: style.weight,
+                            opacity: style.opacity,
+                            className,
+                          } as any}
+                          eventHandlers={{
+                            click: () => {
+                              setActiveSegment(segment.id);
+                              // If you click an alt route segment, promote that route as primary (if handler exists)
+                              if (!isPrimary && onRouteSelect) onRouteSelect(routeOpt.id);
+                            },
+                            mouseover: (e) => {
+                              e.target.setStyle({ weight: style.weight + 2, opacity: Math.min(1, style.opacity + 0.15) });
+                            },
+                            mouseout: (e) => {
+                              e.target.setStyle({ weight: style.weight, opacity: style.opacity });
+                            },
+                          }}
+                        >
+                          <Popup>
+                            <div className="text-sm">
+                              <div className="font-bold mb-2">{segment.band} Congestion</div>
+                              <div className="space-y-1 text-xs">
+                                <div>
+                                  Route: <strong>{routeOpt.name}</strong>
+                                </div>
+                                <div>
+                                  Multiplier: <strong>{segment.multiplier}×</strong>
+                                </div>
+                                <div>
+                                  Base: <strong>{segment.baseEmissions} kg CO₂e</strong>
+                                </div>
+                                <div>
+                                  Adjusted: <strong className="text-red-600">{segment.adjustedEmissions} kg CO₂e</strong>
+                                </div>
+                                <div>
+                                  Traffic Impact: <strong className="text-red-600">+{segment.deltaEmissions} kg</strong>
+                                </div>
+                                <div>
+                                  Confidence: <strong>{(segment.confidence * 100).toFixed(0)}%</strong>
+                                </div>
+                              </div>
+                            </div>
+                          </Popup>
+                        </Polyline>
+
+                        {/* Particles */}
+                        {animated
+                          ? rates.map((r, i) => (
+                              <EmissionsFlowMarker
+                                key={`${routeOpt.id}:${segment.id}:p${i}`}
+                                path={segment.path}
+                                color={style.color}
+                                emissionRate={r}
+                                intensity={intensity}
+                                zIndexOffset={z + i}
+                              />
+                            ))
+                          : null}
+                      </React.Fragment>
+                    );
+                  })}
+                </React.Fragment>
+              );
+            })}
+
+            {/* Incidents */}
             {activeIncidents.map((incident) => (
-              <Marker
-                key={incident.id}
-                position={incident.coordinates}
-                icon={getIncidentIcon(incident)}
-              >
+              <Marker key={incident.id} position={incident.coordinates} icon={getIncidentIcon(incident)}>
                 <Popup>
                   <div className="text-sm">
                     <div className="font-bold mb-2">{incident.type.toUpperCase()}</div>
                     <div className="space-y-1 text-xs">
                       <div>{incident.location}</div>
-                      <div>Delay: <strong>{incident.delay} min</strong></div>
+                      <div>
+                        Delay: <strong>{incident.delay} min</strong>
+                      </div>
                       <div className="text-red-600">
                         Emissions Impact: <strong>+{incident.emissionsImpact} kg CO₂e</strong>
                       </div>
@@ -644,7 +967,7 @@ useEffect(() => {
           <div className="absolute bottom-4 left-4 bg-slate-900/95 backdrop-blur-sm rounded-lg p-3 border border-slate-700 z-[1000]">
             <div className="text-xs font-semibold text-slate-300 mb-2">Congestion Level</div>
             <div className="space-y-1.5">
-              {['Free', 'Moderate', 'Heavy', 'Severe'].map(band => (
+              {["Free", "Moderate", "Heavy", "Severe"].map((band) => (
                 <div key={band} className="flex items-center gap-2">
                   <div className="w-4 h-2 rounded" style={{ backgroundColor: getBandColor(band) }} />
                   <span className="text-xs text-slate-400">{band}</span>
@@ -653,39 +976,45 @@ useEffect(() => {
             </div>
           </div>
         </div>
+        {/* ✅ IMPORTANT: closes the MAP COLUMN div (lg:col-span-2) properly */}
 
-        {/* Incidents & Stats Panel (RIGHT) — unchanged */}
+        {/* Incidents & Stats Panel (RIGHT) */}
         <div className="space-y-4">
           {/* Emissions Summary */}
           <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
             <h4 className="text-sm font-semibold text-slate-300 mb-3">Emissions Impact</h4>
+
             <div className="space-y-3">
               <div>
                 <div className="flex justify-between text-xs text-slate-400 mb-1">
                   <span>Base Emissions</span>
-                  <span>{activeRoute.reduce((sum, s) => sum + s.baseEmissions, 0).toFixed(1)} kg</span>
+                  <span>{(totals.base ?? 0).toFixed(1)} kg</span>
                 </div>
                 <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-emerald-500 rounded-full" style={{ width: '100%' }} />
+                  <div className="h-full bg-emerald-500 rounded-full" style={{ width: "100%" }} />
                 </div>
               </div>
+
               <div>
                 <div className="flex justify-between text-xs text-slate-400 mb-1">
                   <span>Traffic Penalty</span>
-                  <span className="text-red-400">+{emissionsDelta.toFixed(1)} kg</span>
+                  <span className="text-red-400">+{(totals.delta ?? 0).toFixed(1)} kg</span>
                 </div>
                 <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
                   <div
                     className="h-full bg-red-500 rounded-full"
-                    style={{ width: `${(emissionsDelta / totalEmissions) * 100}%` }}
+                    style={{
+                      width: `${(totals.total ?? 0) > 0 ? ((totals.delta ?? 0) / (totals.total ?? 1)) * 100 : 0}%`,
+                    }}
                   />
                 </div>
               </div>
+
               <div className="pt-2 border-t border-slate-700">
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-slate-400">Efficiency Loss</span>
                   <span className="text-lg font-bold text-red-400">
-                    {((emissionsDelta / (totalEmissions - emissionsDelta)) * 100).toFixed(1)}%
+                    {((totals.delta ?? 0) / Math.max(1e-6, totals.base ?? 0) * 100).toFixed(1)}%
                   </span>
                 </div>
               </div>
@@ -702,22 +1031,45 @@ useEffect(() => {
             </div>
 
             <div className="space-y-2">
-              {activeIncidents.map(incident => (
+              {activeIncidents.map((incident) => (
                 <div
                   key={incident.id}
-                  className={`p-3 rounded-lg border ${getSeverityColor(incident.severity)} transition-all duration-200 hover:scale-[1.02] cursor-pointer`}
+                  className={`p-3 rounded-lg border ${severityClass(
+                    incident.severity
+                  )} transition-all duration-200 hover:scale-[1.02] cursor-pointer`}
                 >
                   <div className="flex items-start gap-2">
-                    <span className="text-lg">{incident.type === 'accident' ? '🚨' : incident.type === 'construction' ? '🚧' : incident.type === 'weather' ? '🌧️' : '🚗'}</span>
+                    <span className="text-lg">
+                      {incident.type === "accident"
+                        ? "🚨"
+                        : incident.type === "construction"
+                        ? "🚧"
+                        : incident.type === "weather"
+                        ? "🌧️"
+                        : "🚗"}
+                    </span>
+
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-semibold uppercase tracking-wide">{incident.type}</span>
-                        <span className="text-xs opacity-60">{formatTimestamp(incident.timestamp)}</span>
+                        {/* only chip gets severity color */}
+                        <span
+                          className={`text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full border ${severityChipClass(
+                            incident.severity
+                          )} ${severityTextClass(incident.severity)}`}
+                        >
+                          {incident.type}
+                        </span>
+
+                        <span className="text-xs text-slate-400">{formatTimestamp(incident.timestamp)}</span>
                       </div>
-                      <p className="text-xs font-medium mb-1 leading-tight">{incident.location}</p>
-                      <div className="flex items-center gap-3 text-xs">
-                        <span className="opacity-75">⏱️ {incident.delay}m</span>
-                        <span className="opacity-75">💨 +{incident.emissionsImpact} kg CO₂e</span>
+
+                      <p className="text-xs font-medium mb-1 leading-tight text-slate-200">
+                        {incident.location}
+                      </p>
+
+                      <div className="flex items-center gap-3 text-xs text-slate-400">
+                        <span className="opacity-90">⏱️ {incident.delay}m</span>
+                        <span className="text-red-300">💨 +{incident.emissionsImpact} kg CO₂e</span>
                       </div>
                     </div>
                   </div>
@@ -730,18 +1082,20 @@ useEffect(() => {
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-slate-800/50 rounded-lg p-3 text-center border border-slate-700">
               <div className="text-xl font-bold text-emerald-400">
-                {activeRoute.filter(s => s.band === 'Free' || s.band === 'Moderate').length}
+                {(primaryRoute?.segments ?? []).filter((s) => s.band === "Free" || s.band === "Moderate").length}
               </div>
               <div className="text-xs text-slate-400 mt-1">Clear segments</div>
             </div>
+
             <div className="bg-slate-800/50 rounded-lg p-3 text-center border border-slate-700">
               <div className="text-xl font-bold text-red-400">
-                {activeRoute.filter(s => s.band === 'Heavy' || s.band === 'Severe').length}
+                {(primaryRoute?.segments ?? []).filter((s) => s.band === "Heavy" || s.band === "Severe").length}
               </div>
               <div className="text-xs text-slate-400 mt-1">Congested</div>
             </div>
           </div>
         </div>
+
 
         {/* HOTSPOTS: Separate container (full-width row), NOT inside map container */}
         {ENABLE_CHENNAI_LIVE ? (
@@ -774,14 +1128,17 @@ useEffect(() => {
                         <div className="text-[10px] text-slate-400">Speed</div>
                         <div className="text-xs font-semibold text-slate-100">{fmtKmph(flow?.currentSpeedKmph)}</div>
                       </div>
+
                       <div className="rounded-md border border-slate-700 bg-slate-950/40 px-2 py-1">
                         <div className="text-[10px] text-slate-400">Freeflow</div>
                         <div className="text-xs font-semibold text-slate-100">{fmtKmph(flow?.freeFlowSpeedKmph)}</div>
                       </div>
+
                       <div className="rounded-md border border-slate-700 bg-slate-950/40 px-2 py-1">
                         <div className="text-[10px] text-slate-400">Travel</div>
                         <div className="text-xs font-semibold text-slate-100">{fmtMin(flow?.currentTravelTimeSec)}</div>
                       </div>
+
                       <div className="rounded-md border border-slate-700 bg-slate-950/40 px-2 py-1">
                         <div className="text-[10px] text-slate-400">Confidence</div>
                         <div className="text-xs font-semibold text-slate-100">{pct(flow?.confidence)}</div>
@@ -798,7 +1155,6 @@ useEffect(() => {
               })}
             </div>
 
-
             {!TOMTOM_PUBLIC_KEY ? (
               <div className="mt-3 text-[11px] text-amber-200/80">
                 Tip: set NEXT_PUBLIC_TOMTOM_API_KEY to enable the traffic overlay tiles.
@@ -806,12 +1162,13 @@ useEffect(() => {
             ) : null}
           </div>
         ) : null}
-      </div>
 
+      </div>
 
       <style jsx global>{`
         @keyframes pulse-emission {
-          0%, 100% {
+          0%,
+          100% {
             transform: scale(1);
             opacity: 1;
           }
@@ -822,7 +1179,8 @@ useEffect(() => {
         }
 
         @keyframes bounce-incident {
-          0%, 100% {
+          0%,
+          100% {
             transform: translateY(0);
           }
           50% {
