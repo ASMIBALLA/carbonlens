@@ -11,6 +11,7 @@ export interface Route {
   cost: number; // USD
   duration: number; // days
   reliability: number; // 0-1
+  path?: [number, number][];
 }
 
 export interface RouteOptimizationResult {
@@ -39,6 +40,7 @@ export interface RouteOptimizationResult {
   costImpact: number;
   timeDelta: number;
   reason: string;
+  incidents?: any[]; // For real-time map visualization
 
   // UI badges
   data_source: "verified" | "estimated";
@@ -182,8 +184,8 @@ export async function optimizeRouteWithTraffic(
     recommended.route.transportMode === currentRoute.transportMode
       ? `Current route is optimal under current traffic conditions. Confidence: ${confPct}%.`
       : `Switch ${currentRoute.transportMode} → ${recommended.route.transportMode} to reduce emissions under live traffic. Savings: ${Math.max(0, emissionSavings).toFixed(
-          2
-        )} tons CO2e. Confidence: ${confPct}%.`;
+        2
+      )} tons CO2e. Confidence: ${confPct}%.`;
 
   return {
     supplier,

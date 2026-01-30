@@ -61,6 +61,9 @@ interface CarbonTrafficMapProps {
   destination?: { label?: string; coord: [number, number] };
   autoPickBestRoute?: boolean; // default false
 
+  // NEW: Static network markers
+  markers?: { id: string; label: string; lat: number; lon: number; type: string }[];
+  networkRoutes?: RouteOption[];
 }
 
 /** ====== Chennai live mode toggles ====== **/
@@ -289,7 +292,8 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
   source,
   destination,
   autoPickBestRoute = false,
-  
+  markers,
+  networkRoutes
 }) => {
   const [activeSegment, setActiveSegment] = useState<string | null>(null);
 
@@ -299,7 +303,7 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
   const [hotspotLoading, setHotspotLoading] = useState<boolean>(false);
 
 
-  
+
   /** NEW: cache-buster tick for traffic overlay tiles */
   const [tileTick, setTileTick] = useState<number>(0);
 
@@ -729,8 +733,7 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
   }, [computedRouteOptions, internalActiveRouteId]);
 
   const activeIncidents =
-    incidents ??
-    (liveIncidents.length > 0 ? liveIncidents : ENABLE_CHENNAI_LIVE ? chennaiIncidents : demoIncidents);
+    incidents && incidents.length > 0 ? incidents : (liveIncidents.length > 0 ? liveIncidents : ENABLE_CHENNAI_LIVE ? chennaiIncidents : demoIncidents);
 
   const totals = useMemo(() => routeTotals(primaryRoute?.segments ?? []), [primaryRoute]);
 
@@ -738,8 +741,8 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
   const trafficTileUrl =
     ENABLE_CHENNAI_LIVE && TOMTOM_PUBLIC_KEY
       ? `https://api.tomtom.com/traffic/map/4/tile/flow/relative0-dark/{z}/{x}/{y}.png?key=${encodeURIComponent(
-          TOMTOM_PUBLIC_KEY
-        )}&tileSize=256&t=${tileTick}`
+        TOMTOM_PUBLIC_KEY
+      )}&tileSize=256&t=${tileTick}`
       : null;
 
   const fmtKmph = (n?: number) => (typeof n === "number" ? `${Math.round(n)} km/h` : "—");
@@ -774,6 +777,20 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
     const opacity = isPrimary ? 0.9 : 0.45;
     return { color, weight, opacity, intensity };
   };
+
+  // Style for static network nodes
+  const networkNodeIcon = L.divIcon({
+    className: "network-node-marker",
+    html: `<div style="
+      width: 10px;
+      height: 10px;
+      background: #94a3b8;
+      border-radius: 50%;
+      border: 2px solid rgba(15, 23, 42, 0.8);
+      box-shadow: 0 0 10px rgba(148, 163, 184, 0.3);
+    "></div>`,
+    iconSize: [12, 12],
+  });
 
   return (
     <div className="carbon-traffic-map bg-slate-900 rounded-xl shadow-2xl overflow-hidden border border-slate-700">
@@ -818,7 +835,7 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
                     active
                       ? "bg-slate-100/10 border-slate-200/30 text-slate-100"
                       : "bg-slate-950/30 border-slate-700 text-slate-300 hover:bg-slate-100/5",
-                  ].join(" ")}
+                  ].join("")}
                   title={`${t.total.toFixed(1)} kg • +${t.delta.toFixed(1)} kg`}
                 >
                   <span className="font-semibold">{r.name}</span>
@@ -845,6 +862,46 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
             />
 
             {trafficTileUrl ? <TileLayer url={trafficTileUrl} opacity={0.85} /> : null}
+
+            {/* Background Network Highlights (Major Cargo Highways) */}
+            {networkRoutes?.map((nr, i) => (
+              <React.Fragment key={`network-${nr.id}-${i}`}>
+                {nr.segments.map((seg, j) => (
+                  <Polyline
+                    key={`network-seg-${seg.id}-${j}`}
+                    positions={seg.path}
+                    pathOptions={{
+                      color: getBandColor(seg.band),
+                      weight: 3,
+                      opacity: 0.4,
+                      dashArray: "10, 10"
+                    } as any}
+                    eventHandlers={{
+                      mouseover: (e) => {
+                        e.target.setStyle({ weight: 6, opacity: 0.8 });
+                      },
+                      mouseout: (e) => {
+                        e.target.setStyle({ weight: 3, opacity: 0.4 });
+                      },
+                    }}
+                  >
+                    <Popup>
+                      <div className="text-sm">
+                        <div className="font-bold mb-2">{nr.name}</div>
+                        <div className="space-y-1 text-xs">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full" style={{ background: getBandColor(seg.band) }} />
+                            <strong>{seg.band} Flow</strong>
+                          </div>
+                          <div>Type: <strong>Cargo Highway</strong></div>
+                          <div className="text-slate-500 italic mt-2">Network Monitoring Active</div>
+                        </div>
+                      </div>
+                    </Popup>
+                  </Polyline>
+                ))}
+              </React.Fragment>
+            ))}
 
             {/* Render ALL routes:
                 - primary route (selected) on top: higher opacity & more particles
@@ -926,15 +983,15 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
                         {/* Particles */}
                         {animated
                           ? rates.map((r, i) => (
-                              <EmissionsFlowMarker
-                                key={`${routeOpt.id}:${segment.id}:p${i}`}
-                                path={segment.path}
-                                color={style.color}
-                                emissionRate={r}
-                                intensity={intensity}
-                                zIndexOffset={z + i}
-                              />
-                            ))
+                            <EmissionsFlowMarker
+                              key={`${routeOpt.id}:${segment.id}:p${i}`}
+                              path={segment.path}
+                              color={style.color}
+                              emissionRate={r}
+                              intensity={intensity}
+                              zIndexOffset={z + i}
+                            />
+                          ))
                           : null}
                       </React.Fragment>
                     );
@@ -1045,10 +1102,10 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
                       {incident.type === "accident"
                         ? "🚨"
                         : incident.type === "construction"
-                        ? "🚧"
-                        : incident.type === "weather"
-                        ? "🌧️"
-                        : "🚗"}
+                          ? "🚧"
+                          : incident.type === "weather"
+                            ? "🌧️"
+                            : "🚗"}
                     </span>
 
                     <div className="flex-1 min-w-0">
