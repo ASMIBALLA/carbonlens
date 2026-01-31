@@ -118,6 +118,11 @@ export default function TrafficViz({
   const [history, setHistory] = useState<Snap[]>([]);
   const [nowTick, setNowTick] = useState(0);
   const [isPollingFallback, setIsPollingFallback] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Animated display value for smooth transitions
   const [displayCongestion, setDisplayCongestion] = useState(1.0);
@@ -242,7 +247,7 @@ export default function TrafficViz({
               <span className="traf-sep">•</span>
               <span className="traf-muted">Point: {point}</span>
               <span className="traf-sep">•</span>
-              <span className="traf-muted">Updated {latest ? timeAgo(latest.ts) : "…"}</span>
+              <span className="traf-muted">Updated {latest && isMounted ? timeAgo(latest.ts) : "…"}</span>
             </div>
           </div>
 

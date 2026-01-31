@@ -11,6 +11,7 @@ export interface Route {
   cost: number; // USD
   duration: number; // days
   reliability: number; // 0-1
+  baseEmissions?: number; // tons CO2e for optimization baseline
   path?: [number, number][];
 }
 
@@ -19,12 +20,14 @@ export interface RouteOptimizationResult {
 
   currentRoute: Route & {
     adjustedEmission?: number;
+    baseEmissions?: number;
   };
 
   alternativeRoutes: Array<Route & { adjustedEmission?: number }>;
 
   recommendedRoute: Route & {
     adjustedEmission?: number;
+    baseEmissions?: number;
     traffic?: {
       congestionFactor: number;
       delayMinutes: number;

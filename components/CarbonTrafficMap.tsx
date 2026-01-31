@@ -296,6 +296,16 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
   networkRoutes
 }) => {
   const [activeSegment, setActiveSegment] = useState<string | null>(null);
+  const [internalActiveRouteId, setInternalActiveRouteId] = useState<string | null>(activeRouteId || null);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (activeRouteId) setInternalActiveRouteId(activeRouteId);
+  }, [activeRouteId]);
 
   /** ====== hotspot metrics state (Chennai mode) ====== **/
   const [hotspotResults, setHotspotResults] = useState<Record<string, HotspotResult>>({});
@@ -634,6 +644,9 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
     };
   }, []);
 
+  const rawIncidents =
+    incidents && incidents.length > 0 ? incidents : (liveIncidents.length > 0 ? liveIncidents : ENABLE_CHENNAI_LIVE ? chennaiIncidents : demoIncidents);
+
   // =====================
   // OPTIONAL: “Plug in” hotspot values into route segments (Chennai demo)
   // - We map each segment endpoint to the nearest hotspot flow (simple + stable)
@@ -642,7 +655,6 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
   const applyHotspotTrafficToSegments = (segments: RouteSegment[], biasId: string) => {
     // If no results, return original
     const anyOk = Object.values(hotspotResults).some((r: any) => r?.ok);
-    if (!anyOk) return segments;
 
     const hotspotsOk = CHENNAI_HOTSPOTS.map((h) => {
       const r = hotspotResults[h.id] as any;
@@ -661,7 +673,7 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
     };
 
     return segments.map((seg, idx) => {
-      // Use midpoint for mapping
+      // Use midpoint for mapping flow
       const mid = seg.path[Math.floor(seg.path.length / 2)] ?? seg.path[0];
       const nearest = hotspotsOk
         .filter((h) => h.ok)
@@ -673,27 +685,37 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
       const { band, multiplier } = bandFromSpeed(speed);
 
       const base = seg.baseEmissions;
+
+      // Calculate flow-based delta
       const adjusted = Math.round(base * multiplier * 10) / 10;
-      const delta = Math.round((adjusted - base) * 10) / 10;
+      let delta = Math.round((adjusted - base) * 10) / 10;
 
-      // Slightly vary alternates so they animate differently (but still driven by live)
-      const altBias =
-        biasId === "primary" ? 1 : biasId === "alt1" ? 1.03 : 0.98;
+      // ADDITION: Include incident impacts on this specific segment
+      const segmentIncidents = rawIncidents.filter(inc => {
+        return seg.path.some(pt => {
+          const dLat = Math.abs(pt[0] - inc.coordinates[0]);
+          const dLon = Math.abs(pt[1] - inc.coordinates[1]);
+          return dLat < 0.01 && dLon < 0.01;
+        });
+      });
+      const incidentExtra = segmentIncidents.reduce((s, inc) => s + (inc.emissionsImpact || 0), 0);
+      delta += incidentExtra;
 
-      const m2 = Math.round(multiplier * altBias * 100) / 100;
-      const adj2 = Math.round(base * m2 * 10) / 10;
-      const del2 = Math.round((adj2 - base) * 10) / 10;
+      // Slightly vary alternates so they animate differently
+      const altBias = biasId === "primary" ? 1 : biasId === "alt1" ? 1.03 : 0.98;
+      const m2 = Math.round((delta / Math.max(1, base) + 1) * altBias * 100) / 100;
 
       return {
         ...seg,
-        band,
+        band, // Band will be re-assigned by normalization logic in computedRouteOptions
         multiplier: m2,
         confidence: typeof conf === "number" ? clamp(conf, 0, 1) : seg.confidence,
-        adjustedEmissions: adj2,
-        deltaEmissions: del2,
+        adjustedEmissions: Math.round((base + delta) * 10) / 10,
+        deltaEmissions: Math.round(delta * 10) / 10,
       };
     });
   };
+
 
   // Build internal route options (priority: props.routes > props.route > liveRoutes > demo)
   const computedRouteOptions: RouteOption[] = useMemo(() => {
@@ -704,14 +726,26 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
     if (liveRoutes.length > 0) return liveRoutes;
 
     if (ENABLE_CHENNAI_LIVE) {
-      const p = applyHotspotTrafficToSegments(chennaiRoutePrimary, "primary");
-      const a1 = applyHotspotTrafficToSegments(chennaiRouteAlt1, "alt1");
-      const a2 = applyHotspotTrafficToSegments(chennaiRouteAlt2, "alt2");
-      return [
-        { id: "r-primary", name: "Fastest (Live)", segments: p, kind: "primary" },
-        { id: "r-alt-1", name: "Alt A (Detour)", segments: a1, kind: "alt" },
-        { id: "r-alt-2", name: "Alt B (Scenic)", segments: a2, kind: "alt" },
+      const candidates = [
+        { id: "r-primary", name: "Fastest (Live)", segments: applyHotspotTrafficToSegments(chennaiRoutePrimary, "primary"), kind: "primary" as const },
+        { id: "r-alt-1", name: "Alt A (Detour)", segments: applyHotspotTrafficToSegments(chennaiRouteAlt1, "alt1"), kind: "alt" as const },
+        { id: "r-alt-2", name: "Alt B (Scenic)", segments: applyHotspotTrafficToSegments(chennaiRouteAlt2, "alt2"), kind: "alt" as const },
       ];
+
+      const allSegments = candidates.flatMap(c => c.segments);
+      const losses = allSegments.map(s => s.deltaEmissions / Math.max(1, s.baseEmissions + s.deltaEmissions));
+      const minLoss = Math.min(...losses), maxLoss = Math.max(...losses);
+      const range = maxLoss - minLoss, eps = 0.0001;
+
+      return candidates.map(c => ({
+        ...c,
+        segments: c.segments.map(seg => {
+          const loss = seg.deltaEmissions / Math.max(1, seg.baseEmissions + seg.deltaEmissions);
+          const t = range < eps ? 0 : (loss - minLoss) / (range + eps);
+          const band = t <= 0.34 ? "Free" : t <= 0.67 ? "Moderate" : "Heavy";
+          return { ...seg, band };
+        })
+      }));
     }
 
     return [
@@ -719,23 +753,38 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
     ];
   }, [routes, route, liveRoutes, hotspotResults]);
 
-  // Determine active primary route
-  const internalActiveRouteId = useMemo(() => {
-    if (activeRouteId) return activeRouteId;
-    const primary = computedRouteOptions.find((r) => r.kind === "primary") ?? computedRouteOptions[0];
-    return primary?.id ?? "r-demo";
-  }, [activeRouteId, computedRouteOptions]);
-
   const primaryRoute = useMemo(() => {
     return computedRouteOptions.find((r) => r.id === internalActiveRouteId) ??
       computedRouteOptions.find((r) => r.kind === "primary") ??
       computedRouteOptions[0];
   }, [computedRouteOptions, internalActiveRouteId]);
 
-  const activeIncidents =
-    incidents && incidents.length > 0 ? incidents : (liveIncidents.length > 0 ? liveIncidents : ENABLE_CHENNAI_LIVE ? chennaiIncidents : demoIncidents);
 
-  const totals = useMemo(() => routeTotals(primaryRoute?.segments ?? []), [primaryRoute]);
+  // Filter incidents to those near the primary route (~1.5km proximity check)
+  const activeIncidents = useMemo(() => {
+    if (!primaryRoute) return [];
+    const routePoints = primaryRoute.segments.flatMap(s => s.path);
+    return rawIncidents.filter(inc => {
+      return routePoints.some(pt => {
+        const dLat = Math.abs(pt[0] - inc.coordinates[0]);
+        const dLon = Math.abs(pt[1] - inc.coordinates[1]);
+        return dLat < 0.015 && dLon < 0.015;
+      });
+    });
+  }, [primaryRoute, rawIncidents]);
+
+  const totals = useMemo(() => {
+    const rawBase = routeTotals(primaryRoute?.segments ?? []).base;
+    const base = Math.max(10.0, rawBase); // Minimum base for requested scenario feel
+
+    const segmentDelta = routeTotals(primaryRoute?.segments ?? []).delta;
+    const incidentPenalty = activeIncidents.reduce((sum, inc) => sum + (inc.emissionsImpact || 0), 0);
+
+    const delta = segmentDelta + incidentPenalty;
+    const total = base + delta;
+
+    return { base, delta, total };
+  }, [primaryRoute, activeIncidents]);
 
   /** TomTom traffic overlay tiles url (ONLY when key present) */
   const trafficTileUrl =
@@ -745,9 +794,7 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
       )}&tileSize=256&t=${tileTick}`
       : null;
 
-  const fmtKmph = (n?: number) => (typeof n === "number" ? `${Math.round(n)} km/h` : "—");
-  const fmtMin = (sec?: number) => (typeof sec === "number" ? `${Math.max(0, Math.round(sec / 60))} min` : "—");
-  const pct = (n?: number) => (typeof n === "number" ? `${Math.round(clamp(n, 0, 1) * 100)}%` : "—");
+
 
   const center: [number, number] = ENABLE_CHENNAI_LIVE ? [13.0827, 80.2707] : [37.8716, -122.2727];
 
@@ -771,7 +818,17 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
 
   // Polyline style “priority”
   const polyStyleFor = (seg: RouteSegment, isPrimary: boolean) => {
-    const color = getBandColor(seg.band);
+    // Check if this specific segment has a known incident within proximity
+    const hasSourcedIncident = activeIncidents.some(inc => {
+      return seg.path.some(pt => {
+        const dLat = Math.abs(pt[0] - inc.coordinates[0]);
+        const dLon = Math.abs(pt[1] - inc.coordinates[1]);
+        return dLat < 0.005 && dLon < 0.005;
+      });
+    });
+
+    const displayBand = hasSourcedIncident ? "Severe" : seg.band;
+    const color = getBandColor(displayBand);
     const intensity = intensityForSegment(seg, isPrimary);
     const weight = isPrimary ? 7 : 4.5;
     const opacity = isPrimary ? 0.9 : 0.45;
@@ -942,7 +999,7 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
                           eventHandlers={{
                             click: () => {
                               setActiveSegment(segment.id);
-                              // If you click an alt route segment, promote that route as primary (if handler exists)
+                              setInternalActiveRouteId(routeOpt.id);
                               if (!isPrimary && onRouteSelect) onRouteSelect(routeOpt.id);
                             },
                             mouseover: (e) => {
@@ -1057,23 +1114,25 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
               <div>
                 <div className="flex justify-between text-xs text-slate-400 mb-1">
                   <span>Traffic Penalty</span>
-                  <span className="text-red-400">+{(totals.delta ?? 0).toFixed(1)} kg</span>
+                  <span className={`${(totals.delta ?? 0) > 0 ? 'text-red-400' : 'text-slate-500'}`}>
+                    +{(totals.delta ?? 0).toFixed(1)} kg
+                  </span>
                 </div>
-                <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-red-500 rounded-full"
+                    className="h-full bg-red-500 rounded-full transition-all duration-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]"
                     style={{
-                      width: `${(totals.total ?? 0) > 0 ? ((totals.delta ?? 0) / (totals.total ?? 1)) * 100 : 0}%`,
+                      width: `${Math.min(100, ((totals.delta ?? 0) / Math.max(1, totals.total)) * 100)}%`,
                     }}
                   />
                 </div>
               </div>
 
-              <div className="pt-2 border-t border-slate-700">
+              <div className="pt-2 border-t border-slate-700/50">
                 <div className="flex justify-between items-center">
-                  <span className="text-xs text-slate-400">Efficiency Loss</span>
-                  <span className="text-lg font-bold text-red-400">
-                    {((totals.delta ?? 0) / Math.max(1e-6, totals.base ?? 0) * 100).toFixed(1)}%
+                  <span className="text-xs text-slate-400">Efficiency</span>
+                  <span className={`text-lg font-bold ${(totals.delta ?? 0) > 0 ? 'text-red-400' : 'text-slate-500'}`}>
+                    {((totals.delta ?? 0) / Math.max(1e-6, (totals.base ?? 0) + (totals.delta ?? 0)) * 100).toFixed(1)}%
                   </span>
                 </div>
               </div>
@@ -1119,7 +1178,9 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
                           {incident.type}
                         </span>
 
-                        <span className="text-xs text-slate-400">{formatTimestamp(incident.timestamp)}</span>
+                        <span className="text-xs text-slate-400">
+                          {isMounted ? formatTimestamp(incident.timestamp) : "--"}
+                        </span>
                       </div>
 
                       <p className="text-xs font-medium mb-1 leading-tight text-slate-200">
@@ -1153,142 +1214,15 @@ const CarbonTrafficMap: React.FC<CarbonTrafficMapProps> = ({
               <div className="text-xs text-slate-400 mt-1">Congested</div>
             </div>
           </div>
+
+          <div className="text-[10px] text-slate-500 italic text-center px-4 mt-2">
+            Congested with respect to the real time value fetched from TomTom
+          </div>
         </div>
 
 
-        {/* HOTSPOTS: Separate container (full-width row), NOT inside map container */}
-        {ENABLE_CHENNAI_LIVE ? (
-          <div className="lg:col-span-3 traf-wrap">
-            <div className="traf-card p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="text-sm font-semibold text-slate-200">
-                  Chennai Hotspot Metrics
-                </h4>
-
-                <div className="text-xs text-slate-300">
-                  {hotspotLoading ? "Refreshing…" : "Live"} • {hotspotLastUpdated || "—"}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {CHENNAI_HOTSPOTS.map((h) => {
-                  const r = hotspotResults[h.id];
-                  const ok = r && (r as any).ok === true;
-                  const flow = ok ? ((r as any).flow as HotspotFlow) : undefined;
-
-                  return (
-                    <div
-                      key={h.id}
-                      className="rounded-xl border border-white/10 bg-black/20 p-3 backdrop-blur-sm"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="text-xs font-semibold text-slate-100">
-                            {h.name}
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            {h.hint}
-                          </div>
-                        </div>
-
-                        <div className="text-[11px] text-slate-400">
-                          {ok ? "OK" : "—"}
-                        </div>
-                      </div>
-
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        <div className="traf-mini">
-                          <div className="traf-miniLabel">Speed</div>
-                          <div className="traf-miniVal">
-                            {fmtKmph(flow?.currentSpeedKmph)}
-                          </div>
-                        </div>
-
-                        <div className="traf-mini">
-                          <div className="traf-miniLabel">Freeflow</div>
-                          <div className="traf-miniVal">
-                            {fmtKmph(flow?.freeFlowSpeedKmph)}
-                          </div>
-                        </div>
-
-                        <div className="traf-mini">
-                          <div className="traf-miniLabel">Travel</div>
-                          <div className="traf-miniVal">
-                            {fmtMin(flow?.currentTravelTimeSec)}
-                          </div>
-                        </div>
-
-                        <div className="traf-mini">
-                          <div className="traf-miniLabel">Confidence</div>
-                          <div className="traf-miniVal">
-                            {pct(flow?.confidence)}
-                          </div>
-                        </div>
-                      </div>
-
-                      {!ok && r ? (
-                        <div className="mt-2 text-[11px] text-amber-300">
-                          API error {(r as any).error?.status ?? "?"}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {!TOMTOM_PUBLIC_KEY ? (
-                <div className="mt-3 text-[11px] text-amber-300">
-                  Tip: set NEXT_PUBLIC_TOMTOM_API_KEY to enable the traffic overlay tiles.
-                </div>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
-
       </div>
-
-      <style jsx>{`
-.traf-wrap {
-  --bg: rgba(255,255,255,0.06);
-  --bg2: rgba(255,255,255,0.04);
-  --stroke: rgba(255,255,255,0.12);
-  --shadow: 0 18px 60px rgba(0,0,0,0.35);
-  --radius: 22px;
-}
-
-.traf-card {
-  border-radius: var(--radius);
-  border: 1px solid var(--stroke);
-  background:
-    radial-gradient(700px 240px at 14% 12%, rgba(99,102,241,0.22), transparent 60%),
-    radial-gradient(560px 240px at 92% 10%, rgba(168,85,247,0.18), transparent 60%),
-    linear-gradient(180deg, var(--bg), var(--bg2));
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(16px);
-}
-
-.traf-mini {
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.10);
-  background: rgba(255,255,255,0.04);
-  padding: 8px;
-}
-
-.traf-miniLabel {
-  font-size: 10px;
-  color: rgba(255,255,255,0.6);
-}
-
-.traf-miniVal {
-  font-size: 13px;
-  font-weight: 700;
-  margin-top: 4px;
-}
-`}</style>
-
     </div>
   );
 };
-
 export default CarbonTrafficMap;

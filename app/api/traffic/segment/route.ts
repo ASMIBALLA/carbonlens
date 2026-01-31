@@ -64,34 +64,20 @@ export async function POST(req: Request) {
   if (MODE === "sim") {
     return NextResponse.json({
       ok: true,
-      results: hotspots.map((h: any) => {
-        // Generate realistic "live-looking" data
-        const freeFlow = Math.round(40 + Math.random() * 30); // 40-70 km/h
-        const congestionFactor = 0.3 + Math.random() * 0.6; // 0.3 - 0.9 (heavy to light traffic)
-        const currentSpeed = Math.round(freeFlow * congestionFactor);
-
-        // Assume a segment length of ~2.5km for consistent travel times
-        const distanceMeters = 2500;
-        const ffTime = Math.round(distanceMeters / (freeFlow / 3.6));
-        const currTime = Math.round(distanceMeters / (currentSpeed / 3.6));
-
-        return {
-          id: h.id,
-          name: h.name,
-          lat: h.lat,
-          lon: h.lon,
-          ok: true,
-          flow: {
-            currentSpeedKmph: currentSpeed,
-            freeFlowSpeedKmph: freeFlow,
-            currentTravelTimeSec: currTime,
-            freeFlowTravelTimeSec: ffTime,
-            confidence: 0.75 + Math.random() * 0.24, // 0.75 - 0.99
-            roadClosure: Math.random() > 0.95, // 5% chance of closure
-          },
-          fetchedAt: new Date().toISOString(),
-        };
-      }),
+      results: hotspots.map((h: any) => ({
+        id: h.id,
+        name: h.name,
+        lat: h.lat,
+        lon: h.lon,
+        ok: true,
+        flow: {
+          currentSpeedKmph: Math.round(18 + Math.random() * 15),
+          freeFlowSpeedKmph: 45,
+          confidence: 0.85,
+          roadClosure: false,
+        },
+        fetchedAt: new Date().toISOString(),
+      })),
       fetchedAt: new Date().toISOString(),
     });
   }

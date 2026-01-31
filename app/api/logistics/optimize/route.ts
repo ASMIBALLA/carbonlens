@@ -201,6 +201,7 @@ export async function POST(req: Request) {
                     cost: 1300,
                     duration: (alternates[0]?.stats.travelTimeHours || best.stats.travelTimeHours) / 24,
                     reliability: 0.9,
+                    baseEmissions: alternates[0]?.stats.baseEmissions || best.stats.baseEmissions * 1.05,
                     adjustedEmission: alternates[0]?.stats.realEmissions || best.stats.realEmissions * 1.15,
                     // Attach path for visualization if it exists
                     path: alternates[0]?.path
@@ -215,6 +216,7 @@ export async function POST(req: Request) {
                     cost: 1250,
                     duration: best.stats.travelTimeHours / 24,
                     reliability: 0.98,
+                    baseEmissions: best.stats.baseEmissions,
                     adjustedEmission: best.stats.realEmissions,
                     path: best.path,
                     traffic: {
@@ -238,6 +240,7 @@ export async function POST(req: Request) {
                     cost: 1300,
                     duration: a.stats.travelTimeHours / 24,
                     reliability: 0.9,
+                    baseEmissions: a.stats.baseEmissions,
                     adjustedEmission: a.stats.realEmissions,
                     path: a.path,
                     // Pass band through logic inside map or just use default? 

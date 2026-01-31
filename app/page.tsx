@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import TrafficViz from "@/components/TrafficViz";
 import RecommendationPanel from "@/components/RecommendationPanel";
+import ChennaiHotspots from "@/components/ChennaiHotspots";
 import dynamic from "next/dynamic";
 
 const PLACES_CHENNAI = [
@@ -27,7 +28,7 @@ const CHENNAI_CARGO_HIGHWAYS = [
       band: "Free",
       multiplier: 1.02,
       confidence: 1,
-      baseEmissions: 0,
+      baseEmissions: 18.2,
       adjustedEmissions: 0,
       deltaEmissions: 0
     }]
@@ -43,7 +44,7 @@ const CHENNAI_CARGO_HIGHWAYS = [
       band: "Moderate",
       multiplier: 1.18,
       confidence: 1,
-      baseEmissions: 0,
+      baseEmissions: 22.4,
       adjustedEmissions: 0,
       deltaEmissions: 0
     }]
@@ -59,7 +60,7 @@ const CHENNAI_CARGO_HIGHWAYS = [
       band: "Heavy",
       multiplier: 1.35,
       confidence: 1,
-      baseEmissions: 0,
+      baseEmissions: 28.1,
       adjustedEmissions: 0,
       deltaEmissions: 0
     }]
@@ -75,7 +76,7 @@ const CHENNAI_CARGO_HIGHWAYS = [
       band: "Free",
       multiplier: 1.05,
       confidence: 1,
-      baseEmissions: 0,
+      baseEmissions: 15.6,
       adjustedEmissions: 0,
       deltaEmissions: 0
     }]
@@ -91,7 +92,7 @@ const CHENNAI_CARGO_HIGHWAYS = [
       band: "Moderate",
       multiplier: 1.2,
       confidence: 1,
-      baseEmissions: 0,
+      baseEmissions: 12.8,
       adjustedEmissions: 0,
       deltaEmissions: 0
     }]
@@ -107,7 +108,7 @@ const CHENNAI_CARGO_HIGHWAYS = [
       band: "Heavy",
       multiplier: 1.45,
       confidence: 1,
-      baseEmissions: 0,
+      baseEmissions: 14.2,
       adjustedEmissions: 0,
       deltaEmissions: 0
     }]
@@ -123,7 +124,7 @@ const CHENNAI_CARGO_HIGHWAYS = [
       band: "Free",
       multiplier: 1.03,
       confidence: 1,
-      baseEmissions: 0,
+      baseEmissions: 32.5,
       adjustedEmissions: 0,
       deltaEmissions: 0
     }]
@@ -133,11 +134,13 @@ const CHENNAI_CARGO_HIGHWAYS = [
 export default function Page() {
   // State for real-time alerts
   const [alerts, setAlerts] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   // Selection State (Defaults: Chennai Port -> Guindy)
   const [selectedSource, setSelectedSource] = useState(PLACES_CHENNAI[0]);
   const [selectedDestination, setSelectedDestination] = useState(PLACES_CHENNAI[4]);
+
+  const [hasAnalyzed, setHasAnalyzed] = useState(false);
 
   useEffect(() => {
     async function fetchLogistics() {
@@ -145,7 +148,6 @@ export default function Page() {
 
       try {
         setLoading(true);
-        // Demo: Hamburg (53.5511,9.9937) -> Berlin (52.5200,13.4050)
         const res = await fetch("/api/logistics/optimize", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -158,7 +160,6 @@ export default function Page() {
 
         const json = await res.json();
         if (json.outcome === "success" && json.result) {
-          // Enhancing result with readable names for UI
           json.result.currentRoute.origin = selectedSource.label;
           json.result.currentRoute.destination = selectedDestination.label;
           json.result.recommendedRoute.origin = selectedSource.label;
@@ -175,6 +176,10 @@ export default function Page() {
 
     fetchLogistics();
   }, [selectedSource, selectedDestination]);
+
+  const handleManualAnalysis = () => {
+    // Parent analysis trigger (if needed for extra syncing)
+  };
 
   return (
     <main style={{
@@ -268,10 +273,15 @@ export default function Page() {
           </div>
 
           <RecommendationPanel
+            source={selectedSource}
+            destination={selectedDestination}
             alerts={alerts}
             markers={PLACES_CHENNAI}
             networkRoutes={CHENNAI_CARGO_HIGHWAYS}
+            onAnalyze={handleManualAnalysis}
           />
+
+          <ChennaiHotspots />
         </div>
       </div>
     </main>
