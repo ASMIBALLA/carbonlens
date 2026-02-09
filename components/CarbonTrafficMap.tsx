@@ -221,8 +221,6 @@ const EmissionsFlowMarker: React.FC<{
   const map = useMap();
   const [position, setPosition] = useState(0);
 
-  if (!path || path.length < 2) return null;
-
   useEffect(() => {
     // Faster movement = higher emissions (but slowed overall)
     const base = 12000; // ← doubled baseline → slower everywhere
