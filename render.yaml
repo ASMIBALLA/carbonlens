@@ -18,3 +18,7 @@ services:
     envVars:
       - key: NEXT_PUBLIC_API_URL
         value: https://carbonlens-backend.onrender.com
+      - key: NEXT_PUBLIC_CHENNAI_LIVE
+        value: "true"
+      - key: NEXT_PUBLIC_TOMTOM_API_KEY
+        value: ""
