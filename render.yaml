@@ -8,14 +8,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
-      # Allow frontend to access backend (CORS)
-      # Note: Circular dependency with frontend URL. 
-      # Render will resolve this, but you may need to redeploy backend once frontend is live.
+      # CORS: Set this to your frontend URL in the dashboard after deployment
       - key: CORS_ORIGINS
-        fromService:
-          type: web
-          name: carbonlens-frontend
-          property: url
+        value: "*" # Temporary: Allow all origins to ensure initial connectivity
 
   # Frontend Service (Next.js)
   - type: web
@@ -26,9 +21,6 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20.11.0
-      # Point to backend API
+      # API URL: Copy the backend service URL here after deployment
       - key: NEXT_PUBLIC_API_URL
-        fromService:
-          type: web
-          name: carbonlens-backend
-          property: url
+        value: "https://carbonlens-backend.onrender.com" # Placeholder: Update this!
