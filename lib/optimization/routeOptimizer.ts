@@ -217,3 +217,17 @@ export async function optimizeAllRoutesWithTraffic(
     .filter((r) => r.emissionSavings > 0)
     .sort((a, b) => b.emissionSavings - a.emissionSavings);
 }
+
+/**
+ * Wrapper for autonomous agent optimization
+ */
+export async function optimizeRoute(
+  supplier: Supplier,
+  goal: "emissions" | "cost" | "time" = "emissions"
+): Promise<RouteOptimizationResult> {
+  // Use a default traffic point for autonomous checks
+  // In a real scenario, this would determine the relevant route segment
+  const defaultPoint = "52.5200,13.4050";
+  return optimizeRouteWithTraffic(supplier, defaultPoint);
+}
+

@@ -89,7 +89,7 @@ class OptimizationAgent {
       try {
         await this.executeCycle();
         this.state.lastCheckTime = new Date();
-        
+
         // Wait for next cycle
         await this.sleep(this.config.checkIntervalMinutes * 60 * 1000);
       } catch (error) {
@@ -141,8 +141,8 @@ class OptimizationAgent {
       }
 
       // Find route optimizations
-      const routeOpt = optimizeRoute(risk.supplier, 'emissions');
-      
+      const routeOpt = await optimizeRoute(risk.supplier, 'emissions');
+
       if (routeOpt.emissionSavings > this.config.minEmissionReduction) {
         actions.push({
           id: `ACT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -163,7 +163,7 @@ class OptimizationAgent {
       // Check for transport mode changes
       if (risk.supplier.transportMode === 'air') {
         const potentialSavings = risk.supplier.totalEmissions * 0.65; // 65% savings from air->sea
-        
+
         actions.push({
           id: `ACT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           timestamp: new Date(),
@@ -248,15 +248,15 @@ class OptimizationAgent {
     // In production, this would check an approval queue/database
     // For now, we'll simulate some approvals
     const toProcess = [...this.state.pendingApprovals];
-    
+
     for (const action of toProcess) {
       // Simulate: auto-approve high-confidence, low-cost actions after 24 hours
       const hoursWaiting = (Date.now() - action.timestamp.getTime()) / (1000 * 60 * 60);
-      
+
       if (hoursWaiting > 24 && action.confidence > 0.8 && action.costImpact < 10000) {
         action.status = 'approved';
         await this.executeAction(action);
-        
+
         const index = this.state.pendingApprovals.indexOf(action);
         if (index > -1) {
           this.state.pendingApprovals.splice(index, 1);
@@ -314,7 +314,7 @@ class OptimizationAgent {
     if (action) {
       action.status = 'approved';
       await this.executeAction(action);
-      
+
       const index = this.state.pendingApprovals.indexOf(action);
       if (index > -1) {
         this.state.pendingApprovals.splice(index, 1);
@@ -329,12 +329,12 @@ class OptimizationAgent {
     const action = this.state.pendingApprovals.find(a => a.id === actionId);
     if (action) {
       action.status = 'rejected';
-      
+
       const index = this.state.pendingApprovals.indexOf(action);
       if (index > -1) {
         this.state.pendingApprovals.splice(index, 1);
       }
-      
+
       this.state.executionHistory.push(action);
     }
   }
