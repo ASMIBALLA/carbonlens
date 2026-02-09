@@ -1,26 +1,20 @@
 services:
-  # Backend Service (FastAPI)
+  # Backend
   - type: web
     name: carbonlens-backend
     env: python
     buildCommand: pip install -r backend/requirements.txt
     startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port 10000
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.0
-      # CORS: Set this to your frontend URL in the dashboard after deployment
       - key: CORS_ORIGINS
-        value: "*" # Temporary: Allow all origins to ensure initial connectivity
+        value: "*"
 
-  # Frontend Service (Next.js)
+  # Frontend
   - type: web
     name: carbonlens-frontend
     env: node
     buildCommand: npm install; npm run build
     startCommand: npm start
     envVars:
-      - key: NODE_VERSION
-        value: 20.11.0
-      # API URL: Copy the backend service URL here after deployment
       - key: NEXT_PUBLIC_API_URL
-        value: "https://carbonlens-backend.onrender.com" # Placeholder: Update this!
+        value: https://carbonlens-backend.onrender.com
