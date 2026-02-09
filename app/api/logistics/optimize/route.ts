@@ -37,7 +37,14 @@ export async function POST(req: Request) {
         const baseUrl = `https://api.tomtom.com/routing/1/calculateRoute/${origin}:${destination}/json`;
         const url = `${baseUrl}?key=${encodeURIComponent(key)}&traffic=true&routeType=fastest&travelMode=truck&vehicleCommercial=true&maxAlternatives=2&routeRepresentation=polyline`;
 
-        const res = await fetch(url, { cache: "no-store", headers: { Accept: "application/json" } });
+        const res = await fetch(url, {
+            cache: "no-store",
+            headers: {
+                Accept: "application/json",
+                "Referer": "https://carbonlens.onrender.com",
+                "Origin": "https://carbonlens.onrender.com"
+            }
+        });
 
         if (!res.ok) {
             const errBody = await res.text();
@@ -119,7 +126,13 @@ export async function POST(req: Request) {
 
         let incidents: any[] = [];
         try {
-            const incRes = await fetch(incidentUrl, { cache: "no-store" });
+            const incRes = await fetch(incidentUrl, {
+                cache: "no-store",
+                headers: {
+                    "Referer": "https://carbonlens.onrender.com",
+                    "Origin": "https://carbonlens.onrender.com"
+                }
+            });
             if (incRes.ok) {
                 const incJson = await incRes.json();
                 incidents = (incJson.incidents || []).map((inc: any, idx: number) => {

@@ -110,7 +110,11 @@ export async function POST(req: Request) {
     try {
       const res = await fetch(url, {
         cache: "no-store",
-        headers: { "Accept": "application/json" }
+        headers: {
+          "Accept": "application/json",
+          "Referer": "https://carbonlens.onrender.com",
+          "Origin": "https://carbonlens.onrender.com"
+        }
       });
 
       const text = await res.text();
