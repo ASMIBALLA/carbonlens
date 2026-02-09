@@ -1,0 +1,25 @@
+﻿.next/dev/types/validator.ts(62,39): error TS2307: Cannot find module '../../../app/api/analyze/route.js' or its corresponding type declarations.
+.next/dev/types/validator.ts(98,39): error TS2306: File 'D:/carbonlens-main/app/api/recommendations/route.ts' is not a module.
+.next/types/validator.ts(89,39): error TS2306: File 'D:/carbonlens-main/app/api/recommendations/route.ts' is not a module.
+app/api/traffic/route.ts(13,22): error TS2304: Cannot find name 'fetchTrafficSignal'.
+lib/ml/clustering.ts(262,25): error TS2339: Property 'category' does not exist on type 'Partial<Supplier>'.
+lib/ml/clustering.ts(263,56): error TS2339: Property 'category' does not exist on type 'Supplier'.
+lib/ml/clustering.ts(263,85): error TS2339: Property 'category' does not exist on type 'Partial<Supplier>'.
+lib/ml/confidence.ts(120,5): error TS2769: No overload matches this call.
+  Overload 1 of 3, '(callbackfn: (previousValue: ConfidenceScore, currentValue: ConfidenceScore, currentIndex: number, array: ConfidenceScore[]) => ConfidenceScore, initialValue: ConfidenceScore): ConfidenceScore', gave the following error.
+    Type 'string' is not assignable to type 'ConfidenceScore'.
+      Type 'string' is not assignable to type 'ConfidenceScore'.
+  Overload 2 of 3, '(callbackfn: (previousValue: "Estimated", currentValue: ConfidenceScore, currentIndex: number, array: ConfidenceScore[]) => "Estimated", initialValue: "Estimated"): "Estimated"', gave the following error.
+    Type '"Primary" | "Secondary" | "Estimated"' is not assignable to type '"Estimated"'.
+      Type '"Primary"' is not assignable to type '"Estimated"'.
+lib/ml/confidence.ts(131,5): error TS2322: Type 'ConfidenceScore' is not assignable to type '"Primary" | "Secondary" | "Estimated"'.
+lib/optimization/autonomousAgent.ts(8,10): error TS2305: Module '"./routeOptimizer"' has no exported member 'optimizeRoute'.
+lib/optimization/multiObjective.ts(171,45): error TS2538: Type 'undefined' cannot be used as an index type.
+lib/optimization/multiObjective.ts(181,54): error TS2339: Property 'category' does not exist on type 'Supplier'.
+lib/optimization/multiObjective.ts(182,7): error TS2353: Object literal may only specify known properties, and 'category' does not exist in type 'Supplier'.
+lib/optimization/multiObjective.ts(182,34): error TS2339: Property 'category' does not exist on type 'Supplier'.
+lib/optimization/multiObjective.ts(184,37): error TS2339: Property 'coordinates' does not exist on type 'Supplier'.
+lib/optimization/simTraffic.ts(1,33): error TS2307: Cannot find module './types' or its corresponding type declarations.
+lib/optimization/tomtom.ts(1,33): error TS2307: Cannot find module './types' or its corresponding type declarations.
+lib/optimization/trafficAdapter.ts(1,33): error TS2307: Cannot find module './types' or its corresponding type declarations.
+
