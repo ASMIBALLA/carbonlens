@@ -23,6 +23,7 @@ type HotspotResult =
     name: string;
     lat: number;
     lon: number;
+    lon_unused?: never;
     ok: true;
     flow: HotspotFlow;
     fetchedAt: string;
@@ -36,8 +37,6 @@ type HotspotResult =
     error: { status: number; body: string };
   };
 
-const MODE = process.env.TRAFFIC_MODE ?? "sim";
-
 export async function POST(req: Request) {
   let body: any;
 
@@ -50,7 +49,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const hotspots = Array.isArray(body?.hotspots) ? body.hotspots : [];
+  const hotspots: Hotspot[] = Array.isArray(body?.hotspots) ? body.hotspots : [];
   if (!hotspots.length) {
     return NextResponse.json(
       { ok: false, error: { status: 400, body: "Body must include { hotspots: [...] }" } },
@@ -59,12 +58,18 @@ export async function POST(req: Request) {
   }
 
   /* =========================
-     ✅ SIM MODE (EARLY RETURN)
+     🚦 TRAFFIC RESOLVER
      ========================= */
-  if (MODE === "sim") {
+  const MODE = (process.env.TRAFFIC_MODE || "sim").toLowerCase();
+
+  /* =========================
+     ✅ SIM MODE (DEFAULT)
+     ========================= */
+  if (MODE !== "tomtom") {
+    // Return deterministic simulation data matching localhost behavior
     return NextResponse.json({
       ok: true,
-      results: hotspots.map((h: any) => ({
+      results: hotspots.map((h) => ({
         id: h.id,
         name: h.name,
         lat: h.lat,
@@ -79,32 +84,43 @@ export async function POST(req: Request) {
         fetchedAt: new Date().toISOString(),
       })),
       fetchedAt: new Date().toISOString(),
+      source: "simulation"
     });
   }
 
   /* =========================
-     🔒 LIVE MODE (TomTom)
+     🔒 LIVE MODE (TomTom - OPT-IN ONLY)
      ========================= */
   const rawKey = process.env.TOMTOM_API_KEY || process.env.NEXT_PUBLIC_TOMTOM_API_KEY;
   const key = rawKey?.replace(/^["']|["']$/g, "").trim();
 
+  // If mode is TomTom but key missing, fallback gracefully to Sim logic setup
   if (!key) {
-    console.error(`[CarbonLens] Missing TOMTOM_API_KEY environment variable for LIVE mode.`);
-    return NextResponse.json(
-      { ok: false, error: { status: 500, body: "Server configuration error: Missing API Key" } },
-      { status: 500 }
-    );
+    console.warn(`[CarbonLens] TRAFFIC_MODE=tomtom but NO KEY found. Falling back to simulation.`);
+    return NextResponse.json({
+      ok: true,
+      results: hotspots.map((h) => ({
+        id: h.id,
+        name: h.name,
+        lat: h.lat,
+        lon: h.lon,
+        ok: true,
+        flow: {
+          currentSpeedKmph: Math.round(18 + Math.random() * 15),
+          freeFlowSpeedKmph: 45,
+          confidence: 0.85,
+          roadClosure: false,
+        },
+        fetchedAt: new Date().toISOString(),
+      })),
+      fetchedAt: new Date().toISOString(),
+      source: "simulation_fallback"
+    });
   }
 
+  // Helper to fetch flow for one hotspot
   async function fetchFlow(h: Hotspot): Promise<HotspotResult> {
-    // TomTom Traffic Flow - Flow Segment Data
-    // Stats: currentSpeed, freeFlowSpeed, currentTravelTime, freeFlowTravelTime, confidence
-    // Endpoint: /traffic/services/4/flowSegmentData/absolute/{zoom}/json
     const baseUrl = "https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json";
-
-    // IMPORTANT: 'point' parameter should be "lat,lon". 
-    // We do NOT encodeURIComponent the comma to ensure the API parses it correctly 
-    // and to align with known working patterns for this endpoint.
     const url = `${baseUrl}?key=${encodeURIComponent(key!)}&point=${h.lat},${h.lon}`;
 
     try {
@@ -117,42 +133,22 @@ export async function POST(req: Request) {
         }
       });
 
-      const text = await res.text();
-      let json: any;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        json = null;
-      }
-
       if (!res.ok) {
-        // Detailed debug logging as requested
-        console.error(`[TomTom API Error] Status: ${res.status} for ${h.name} (${h.id})`);
-        console.error(`Endpoint: ${baseUrl}`);
-        if (text) console.error(`Response Body: ${text.slice(0, 500)}`);
-
+        // Return minimal error, avoiding spam
         return {
           id: h.id,
           name: h.name,
           lat: h.lat,
           lon: h.lon,
           ok: false,
-          error: { code: "TOMTOM_ERROR", status: res.status, body: text.slice(0, 500) } as any,
+          error: { status: res.status, body: "External Provider Unavailable" }
         };
       }
 
+      const json = await res.json();
       const data = json?.flowSegmentData;
 
-      if (!data) {
-        return {
-          id: h.id,
-          name: h.name,
-          lat: h.lat,
-          lon: h.lon,
-          ok: false,
-          error: { status: 404, body: "No flowSegmentData in response" },
-        };
-      }
+      if (!data) throw new Error("No data");
 
       return {
         id: h.id,
@@ -171,24 +167,25 @@ export async function POST(req: Request) {
         fetchedAt: new Date().toISOString(),
       };
 
-    } catch (e: any) {
-      console.error(`[TomTom API Exception] ${h.name}:`, e);
+    } catch (e) {
       return {
         id: h.id,
         name: h.name,
         lat: h.lat,
         lon: h.lon,
         ok: false,
-        error: { status: 500, body: e.message || "Fetch failed" },
+        error: { status: 500, body: "Fetch failed" }
       };
     }
   }
 
+  // Execute all fetches parallely
   const results = await Promise.all(hotspots.map(fetchFlow));
 
   return NextResponse.json({
     ok: true,
     results,
     fetchedAt: new Date().toISOString(),
+    source: "tomtom"
   });
 }
