@@ -23,7 +23,7 @@ export async function POST(req: Request) {
             );
         }
 
-        const key = process.env.TOMTOM_API_KEY?.trim();
+        const key = (process.env.TOMTOM_API_KEY || process.env.NEXT_PUBLIC_TOMTOM_API_KEY)?.trim();
         if (!key) {
             return NextResponse.json(
                 { ok: false, error: "Missing TOMTOM_API_KEY" },
