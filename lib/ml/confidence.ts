@@ -114,13 +114,13 @@ export function aggregateConfidence(scores: ConfidenceScore[]): ConfidenceScore 
 
   const allFactors = Array.from(new Set(scores.flatMap(s => s.factors)));
 
-  const qualityRank = { Primary: 3, Secondary: 2, Estimated: 1 };
+  const qualityRank: Record<'Primary' | 'Secondary' | 'Estimated', number> = { Primary: 3, Secondary: 2, Estimated: 1 };
 
-  const bestQuality = scores.reduce((best, curr) =>
+  const bestQuality = scores.reduce<'Primary' | 'Secondary' | 'Estimated'>((best, curr) =>
     qualityRank[curr.dataQuality] > qualityRank[best]
       ? curr.dataQuality
       : best
-  , 'Estimated' as const);
+    , 'Estimated');
 
   const anyEstimated = scores.some(s => s.dataSourceLabel === 'estimated');
 

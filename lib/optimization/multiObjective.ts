@@ -119,7 +119,7 @@ function generateAlternativeSuppliers(originalSupplier: Supplier): Supplier[] {
 
   // Generate 2-3 alternatives with different characteristics
   const alternativeConfigs = [
-    { 
+    {
       namePrefix: 'Regional',
       distanceMultiplier: 0.4, // 60% closer
       costMultiplier: 1.15, // 15% more expensive
@@ -168,7 +168,8 @@ function generateAlternativeSuppliers(originalSupplier: Supplier): Supplier[] {
     };
 
     const transportEmissions = newWeight * newDistance * EMISSION_FACTORS[config.transportMode];
-    const materialFactor = MATERIAL_FACTORS[config.material] || 2.0;
+    const materialKey = config.material ?? 'default';
+    const materialFactor = MATERIAL_FACTORS[materialKey] || 2.0;
     const materialEmissions = newWeight * 1000 * materialFactor;
     let totalEmissions = (transportEmissions + materialEmissions) / 1000;
 
@@ -212,11 +213,11 @@ function evaluateConstraints(
         const costIncreasePct = solution.objectives.costImpact / totalCost;
         if (costIncreasePct > constraint.value) return false;
         break;
-      
+
       case 'min_delivery_time':
         if (solution.objectives.deliveryTimeImpact > constraint.value) return false;
         break;
-      
+
       case 'max_supplier_changes':
         const changeCount = solution.changes.filter(c => c.action === 'replace').length;
         const totalSuppliers = solution.supplierAllocations.size;
@@ -242,7 +243,7 @@ function calculateScore(
   const normalizedCost = Math.min(1, Math.abs(objectives.costImpact) / 1000000);
   const normalizedTime = Math.min(1, Math.abs(objectives.deliveryTimeImpact) / 30);
 
-  const score = 
+  const score =
     carbonReduction.weight * normalizedEmission +
     costMinimization.weight * (1 - normalizedCost) + // Invert for minimization
     deliveryTime.weight * (1 - normalizedTime);
@@ -279,7 +280,7 @@ export function optimizeSupplierMix(
     // Option 1: Change transport mode
     if (config.allowTransportModeChanges && supplier.transportMode === 'air') {
       const seaSwitch = calculateTransportModeSwitch(supplier, 'sea');
-      
+
       if (seaSwitch.emissionChange < 0) { // Reduction
         const change: SupplierChange = {
           originalSupplier: supplier,
@@ -300,7 +301,7 @@ export function optimizeSupplierMix(
     // Option 2: Replace with alternative supplier
     if (config.allowSupplierChanges) {
       const alternatives = generateAlternativeSuppliers(supplier);
-      
+
       for (const alt of alternatives) {
         const emissionReduction = supplier.totalEmissions - alt.totalEmissions;
         const costChange = alt.annualSpend - supplier.annualSpend;
@@ -329,7 +330,7 @@ export function optimizeSupplierMix(
       changes.push(bestChange);
       totalEmissionReduction += Math.abs(bestChange.emissionImpact);
       totalCostImpact += bestChange.costImpact;
-      
+
       if (bestChange.action === 'replace' && bestChange.newSupplier) {
         supplierAllocations.set(supplier.id, 0);
         supplierAllocations.set(bestChange.newSupplier.id, 1.0);

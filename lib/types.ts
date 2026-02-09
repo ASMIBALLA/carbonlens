@@ -17,6 +17,10 @@ export interface Supplier {
   emissionIntensity: number; // arbitrary intensity scale
   annualSpend: number; // USD
 
-  // Optional
+  // Optional extended properties
   material?: string;
+  category?: string;
+  coordinates?: { lat: number; lng: number };
+  emissionFactor?: number;
 }
+
