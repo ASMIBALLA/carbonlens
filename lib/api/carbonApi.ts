@@ -65,7 +65,11 @@ class CarbonEmissionAPI {
             return response.json();
         } catch (err: any) {
             if (err.name === 'TypeError' && err.message === 'Failed to fetch') {
-                throw new Error(`Connection refused at ${this.baseURL}. Ensure FastAPI backend is running.`);
+                const isLocal = this.baseURL.includes("localhost") || this.baseURL.includes("127.0.0.1");
+                const advice = isLocal
+                    ? "If deployed, set NEXT_PUBLIC_API_URL to your backend URL."
+                    : "Check if backend is running.";
+                throw new Error(`Connection refused at ${this.baseURL}. ${advice}`);
             }
             throw err;
         }

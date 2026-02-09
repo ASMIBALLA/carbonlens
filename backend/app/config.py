@@ -13,11 +13,13 @@ API_VERSION = "1.0.0"
 API_DESCRIPTION = "API for predicting carbon emissions based on logistics data"
 
 # CORS settings
-ALLOWED_ORIGINS = [
+# CORS settings
+ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "").split(",")
+ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS if origin.strip()]
+ALLOWED_ORIGINS += [
     "http://localhost:3000",
     "http://localhost:3001",
     "http://127.0.0.1:3000",
-    # Add your production frontend URL here
 ]
 
 # Feature validation
