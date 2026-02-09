@@ -22,6 +22,16 @@ export async function POST(req: Request) {
         // Returns deterministic mock data to guarantee stability
         // and prevent any external calls to TomTom.
         if (MODE !== "tomtom") {
+            const [orgLat, orgLon] = (origin || "13.0827,80.2707").split(",").map(Number);
+            const [dstLat, dstLon] = (destination || "12.9716,80.2437").split(",").map(Number);
+
+            // Create a simple 3-point line so the map has something to render
+            const simPath = [
+                [orgLat, orgLon],
+                [orgLat + (dstLat - orgLat) * 0.5, orgLon + (dstLon - orgLon) * 0.5],
+                [dstLat, dstLon]
+            ];
+
             return NextResponse.json({
                 outcome: "success",
                 result: {
@@ -50,7 +60,7 @@ export async function POST(req: Request) {
                         reliability: 0.9,
                         baseEmissions: 50,
                         adjustedEmission: 55,
-                        path: [] // Sim mode does not generate a polyline
+                        path: simPath
                     },
                     recommendedRoute: {
                         id: "opt-sim",
@@ -64,7 +74,7 @@ export async function POST(req: Request) {
                         reliability: 0.95,
                         baseEmissions: 40,
                         adjustedEmission: 45,
-                        path: [], // Sim mode does not generate a polyline
+                        path: simPath,
                         traffic: {
                             congestionFactor: 1.1,
                             delayMinutes: 2,
