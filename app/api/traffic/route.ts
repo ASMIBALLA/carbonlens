@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { fetchTrafficSignal } from "@/lib/optimization/trafficAdapter";
+//import { fetchTrafficSignal } from "@/lib/optimization/trafficAdapter";
+import { getTrafficSnapshot } from "@/lib/optimization/trafficAdapter";
 
 
 
