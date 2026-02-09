@@ -85,7 +85,8 @@ export async function POST(req: Request) {
   /* =========================
      🔒 LIVE MODE (TomTom)
      ========================= */
-  const key = (process.env.TOMTOM_API_KEY || process.env.NEXT_PUBLIC_TOMTOM_API_KEY)?.trim();
+  const rawKey = process.env.TOMTOM_API_KEY || process.env.NEXT_PUBLIC_TOMTOM_API_KEY;
+  const key = rawKey?.replace(/^["']|["']$/g, "").trim();
 
   if (!key) {
     console.error(`[CarbonLens] Missing TOMTOM_API_KEY environment variable for LIVE mode.`);
