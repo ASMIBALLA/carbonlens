@@ -31,7 +31,7 @@ export interface HealthResponse {
 }
 
 // API Configuration
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const API_BASE_URL = '/api'; // Always use internal Next.js API routes
 
 class CarbonEmissionAPI {
     private baseURL: string;
@@ -64,13 +64,7 @@ class CarbonEmissionAPI {
 
             return response.json();
         } catch (err: any) {
-            if (err.name === 'TypeError' && err.message === 'Failed to fetch') {
-                const isLocal = this.baseURL.includes("localhost") || this.baseURL.includes("127.0.0.1");
-                const advice = isLocal
-                    ? "If deployed, set NEXT_PUBLIC_API_URL to your backend URL."
-                    : "Check if backend is running.";
-                throw new Error(`Connection refused at ${this.baseURL}. ${advice}`);
-            }
+            console.error(`API Request failed to ${url}`, err);
             throw err;
         }
     }
