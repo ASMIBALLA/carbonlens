@@ -129,5 +129,3 @@ The core intelligence is driven by a Scikit-learn regressor optimized for logist
 | **ML/Data** | Scikit-learn, Pandas, Joblib |
 | **APIs** | TomTom Routing & Traffic |
 
-# Resume-Ready Summary
-Developed **CarbonLens**, a full-stack logistics optimization platform that integrates **Machine Learning** and **Real-Time Traffic Telemetry** to reduce supply chain emissions. Built a **FastAPI** microservice to serve a **Scikit-learn** model for low-latency carbon forecasting, integrated with a **Next.js** frontend via **SSE (Server-Sent Events)** for live dashboarding. Optimized routing logic using the **TomTom API**, implementing dynamic emission penalty calculations based on real-time incidents and segment-specific congestion flow. Designed a premium, data-dense UI that enables logistics managers to compare fleet configurations and identify eco-efficient paths, resulting in a data-driven approach to sustainable freight management.
