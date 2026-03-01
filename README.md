@@ -82,11 +82,12 @@ The core intelligence is driven by a Scikit-learn regressor optimized for logist
 - **Fallback Behavior**: `TrafficViz` automatically downgrades from SSE to high-frequency polling if the stream connection is interrupted.
 - **Normalization**: Traffic flow speed is normalized against freeflow benchmarks to calculate a consistent `congestionFactor`.
 
-# UI/UX Engineering Notes
-- **Interactive Maps**: Custom Leaflet markers with SVG icons and animated "flow" particles representing emissions intensity.
-- **Animated Indicators**: Pulse animations for live status and high-severity incidents to reduce cognitive load.
-- **Design System**: Deep-space theme utilizing glassmorphism (`backdrop-filter`) and vibrant emerald/amber/rose palettes for actionable data visualization.
-- **Performance**: Heavy computation (like route optimization) is memoized using React's `useMemo` to ensure smooth map interactions.
+# UI/UX
+<img width="1500" height="485" alt="image" src="https://github.com/user-attachments/assets/f281a65f-98f2-476e-afba-51c1527d3b45" />
+<img width="498" height="263" alt="image" src="https://github.com/user-attachments/assets/a2b5c159-5fef-4d78-9e47-fbdfb3ee7fab" />
+<img width="529" height="265" alt="image" src="https://github.com/user-attachments/assets/34bd94b6-26ca-4a22-9f3b-4504b7326c31" />
+<img width="557" height="366" alt="image" src="https://github.com/user-attachments/assets/45369537-0a2c-4f0f-b5db-b10769437442" />
+
 
 # Setup Instructions
 ### Frontend (Next.js)
@@ -128,4 +129,5 @@ The core intelligence is driven by a Scikit-learn regressor optimized for logist
 | **Backend** | FastAPI, Python 3.10+, Pydantic |
 | **ML/Data** | Scikit-learn, Pandas, Joblib |
 | **APIs** | TomTom Routing & Traffic |
+
 
