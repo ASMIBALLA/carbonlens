@@ -83,9 +83,9 @@ The core intelligence is driven by a Scikit-learn regressor optimized for logist
 - **Normalization**: Traffic flow speed is normalized against freeflow benchmarks to calculate a consistent `congestionFactor`.
 
 # UI/UX
-<img width="1500" height="485" alt="image" src="https://github.com/user-attachments/assets/f281a65f-98f2-476e-afba-51c1527d3b45" />
 <img width="498" height="263" alt="image" src="https://github.com/user-attachments/assets/a2b5c159-5fef-4d78-9e47-fbdfb3ee7fab" />
 <img width="529" height="265" alt="image" src="https://github.com/user-attachments/assets/34bd94b6-26ca-4a22-9f3b-4504b7326c31" />
+<img width="457" height="370" alt="image" src="https://github.com/user-attachments/assets/d7394a2b-3786-4676-bbc2-6bca9a8c4cd7" />
 <img width="557" height="366" alt="image" src="https://github.com/user-attachments/assets/45369537-0a2c-4f0f-b5db-b10769437442" />
 
 
