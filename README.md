@@ -17,7 +17,7 @@ CarbonLens bridges the gap between static logistics planning and real-time opera
 - **Vehicle Comparison + Recommendation**: A manual "Analyze" engine that pits multiple fleet configurations against each other to identify the "Optimal" (lowest impact) choice.
 - **Emissions Optimization Logic**: A multi-path optimization algorithm that evaluates primary and alternative routes to surface the most eco-efficient path.
 
-# Key Technical Highlights (Recruiter Section)
+# Key Technical Highlights
 - **ML Model Integration**: Production-grade implementation of a Scikit-learn regressor served via a FastAPI backend, enabling low-latency inference.
 - **Polyglot Full-Stack Architecture**: Next.js (App Router/TypeScript) frontend communicating with a high-performance Python FastAPI microservice for specialized ML workloads.
 - **Real-Time Traffic Ingestion**: Automated ingestion of TomTom Traffic Flow and Incident data, mapped directly to route segments for precise impact analysis.
@@ -52,7 +52,7 @@ The system follows a modern decoupled architecture designed for scale and specia
 - **Vehicle Comparison**: Real-time comparison table ranking fleet options from "Optimal" to "High Impact" based on predicted CO2e output.
 - **Incident Inventory**: Categorized list of active accidents, construction, and weather events with calculated emission penalties.
 
-# ML Model Section (Important for Recruiters)
+# ML Model Section
 The core intelligence is driven by a Scikit-learn regressor optimized for logistics variability.
 - **Predicts**: Continuous value representing `predicted_emission_kgco2e`.
 - **Input Features**: `origin_facility`, `vehicle_type`, `route_type`, and `distance_km`.
